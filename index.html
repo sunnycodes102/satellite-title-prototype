@@ -303,8 +303,11 @@
                 <div class="input-group">
                     <label for="tile-code">Tile Code</label>
                     <input type="text" id="tile-code" placeholder="M713289" value="M713289">
+                    <button class="btn btn-secondary" id="load-tile-btn" onclick="loadTileFromCode()" style="margin-top: 8px;">
+                        Load Tile
+                    </button>
                 </div>
-                
+
                 <div class="input-group">
                     <label>Or Load KML File</label>
                     <div class="file-input-wrapper">
@@ -371,9 +374,12 @@
     
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
+
     <!-- html2canvas for capturing map -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- TileLookup - Geodesic tile coordinate calculator -->
+    <script src="lib/TileLookup.js"></script>
     
     <script>
         // ============================================
@@ -404,15 +410,30 @@
         let map = null;
         let tileLayer = null;
         let triangleLayer = null;
+        let subTileLayers = [];  // Array to hold sub-tile polygon layers
         let currentTileData = { ...DEFAULT_TILE };
+        let currentSubTiles = [];  // Array of 9 sub-tile coordinate sets
+
+        // TileLookup instance for converting tile codes to coordinates
+        let tileLookup = null;
         
         // ============================================
         // INITIALIZATION
         // ============================================
         
         document.addEventListener('DOMContentLoaded', function() {
+            // Initialize TileLookup
+            tileLookup = new TileLookup();
+
             initMap();
             updateDisplay();
+
+            // Add Enter key handler for tile code input
+            document.getElementById('tile-code').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    loadTileFromCode();
+                }
+            });
         });
         
         /**
@@ -443,25 +464,46 @@
         }
         
         /**
-         * Draw triangle overlay on the map
+         * Draw triangle overlay on the map (main tile + 9 sub-tiles)
          */
         function drawTriangle(coordinates) {
             // Remove existing triangle if any
             if (triangleLayer) {
                 map.removeLayer(triangleLayer);
             }
-            
+
+            // Remove existing sub-tile layers
+            subTileLayers.forEach(layer => map.removeLayer(layer));
+            subTileLayers = [];
+
             // Convert to Leaflet format [lat, lng]
             const latLngs = coordinates.map(coord => [coord[1], coord[0]]);
-            
-            // Create polygon
+
+            // Create main polygon
             triangleLayer = L.polygon(latLngs, {
                 color: '#00d4aa',
                 weight: 3,
                 fillColor: '#00d4aa',
                 fillOpacity: 0.15
             }).addTo(map);
-            
+
+            // Get and draw sub-tiles if we have a valid tile code
+            if (currentTileData.code && tileLookup) {
+                currentSubTiles = getSubTileCoordinates(currentTileData.code);
+
+                currentSubTiles.forEach(subTile => {
+                    const subLatLngs = subTile.coordinates.map(coord => [coord[1], coord[0]]);
+                    const subLayer = L.polygon(subLatLngs, {
+                        color: '#ffaa00',  // Orange for sub-tiles
+                        weight: 2,
+                        fillColor: 'transparent',
+                        fillOpacity: 0,
+                        dashArray: '5, 5'  // Dashed line
+                    }).addTo(map);
+                    subTileLayers.push(subLayer);
+                });
+            }
+
             // Fit map to triangle bounds
             map.fitBounds(triangleLayer.getBounds(), { padding: [50, 50] });
         }
@@ -488,7 +530,7 @@
         function calculateBounds(coordinates) {
             const lats = coordinates.map(c => c[1]);
             const lngs = coordinates.map(c => c[0]);
-            
+
             return {
                 north: Math.max(...lats),
                 south: Math.min(...lats),
@@ -496,7 +538,38 @@
                 west: Math.min(...lngs)
             };
         }
-        
+
+        /**
+         * Get coordinates for all 9 sub-tiles of a given tile code
+         * @param {string} tileCode - Parent tile code (e.g., "M713289")
+         * @returns {Array} Array of 9 sub-tile coordinate arrays
+         */
+        function getSubTileCoordinates(tileCode) {
+            const subTiles = [];
+
+            for (let i = 1; i <= 9; i++) {
+                const subTileCode = tileCode + i;
+                try {
+                    const locations = tileLookup.nameToLocations(subTileCode);
+                    // Convert to [lng, lat] format and close the triangle
+                    const coords = [
+                        [locations[0][1], locations[0][0]],
+                        [locations[1][1], locations[1][0]],
+                        [locations[2][1], locations[2][0]],
+                        [locations[0][1], locations[0][0]]  // Close
+                    ];
+                    subTiles.push({
+                        code: subTileCode,
+                        coordinates: coords
+                    });
+                } catch (e) {
+                    console.warn('Could not get sub-tile:', subTileCode, e);
+                }
+            }
+
+            return subTiles;
+        }
+
         // ============================================
         // KML PARSING
         // ============================================
@@ -540,9 +613,61 @@
         }
         
         // ============================================
+        // TILE CODE LOADING
+        // ============================================
+
+        /**
+         * Load tile coordinates from tile code using TileLookup
+         */
+        function loadTileFromCode() {
+            const tileCode = document.getElementById('tile-code').value.trim().toUpperCase();
+
+            if (!tileCode) {
+                setStatus('Please enter a tile code', 'error');
+                return;
+            }
+
+            // Validate format: 1 letter (A-T) + 1-6 digits (1-9)
+            const validPattern = /^[A-T][1-9]{1,6}$/;
+            if (!validPattern.test(tileCode)) {
+                setStatus('Invalid tile code. Format: Letter (A-T) + 1-6 digits (1-9). Example: M713289', 'error');
+                return;
+            }
+
+            try {
+                // Get coordinates from tile code
+                const locations = tileLookup.nameToLocations(tileCode);
+
+                // Convert to our coordinate format [lng, lat] and close the triangle
+                const coordinates = [
+                    [locations[0][1], locations[0][0]],  // [lng, lat]
+                    [locations[1][1], locations[1][0]],
+                    [locations[2][1], locations[2][0]],
+                    [locations[0][1], locations[0][0]]   // Close the triangle
+                ];
+
+                // Update current tile data
+                currentTileData = {
+                    code: tileCode,
+                    coordinates: coordinates
+                };
+
+                // Update map
+                drawTriangle(currentTileData.coordinates);
+
+                // Update display
+                updateDisplay();
+
+                setStatus('Tile loaded: ' + tileCode, 'info');
+            } catch (error) {
+                setStatus('Error loading tile: ' + error.message, 'error');
+            }
+        }
+
+        // ============================================
         // FILE HANDLING
         // ============================================
-        
+
         document.getElementById('kml-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -589,10 +714,12 @@
                 if (triangleLayer) {
                     triangleLayer.setStyle({ opacity: 0, fillOpacity: 0 });
                 }
-                
+                // Hide sub-tile layers
+                subTileLayers.forEach(layer => layer.setStyle({ opacity: 0 }));
+
                 // Wait for tiles to load
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                
+
                 // Capture the map
                 const mapElement = document.getElementById('map');
                 const canvas = await html2canvas(mapElement, {
@@ -600,11 +727,13 @@
                     allowTaint: true,
                     logging: false
                 });
-                
+
                 // Restore triangle visibility
                 if (triangleLayer) {
                     triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
                 }
+                // Restore sub-tile layers
+                subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
                 
                 // Process the captured image
                 await processImage(canvas);
@@ -615,11 +744,13 @@
                 setStatus('Image generated successfully! Ready to download.', 'info');
             } catch (error) {
                 setStatus('Error generating image: ' + error.message, 'error');
-                
+
                 // Restore triangle visibility on error
                 if (triangleLayer) {
                     triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
                 }
+                // Restore sub-tile layers on error
+                subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Generate Satellite Image';
@@ -671,43 +802,56 @@
         }
         
         /**
-         * Draw triangle boundary on the output canvas
+         * Draw triangle boundary on the output canvas (main tile + sub-tiles)
          */
         function drawTriangleOnCanvas(ctx, canvasSize) {
             const bounds = calculateBounds(currentTileData.coordinates);
             const padding = 0.05;  // 5% padding
-            
+
             // Calculate scale
             const latRange = bounds.north - bounds.south;
             const lngRange = bounds.east - bounds.west;
             const maxRange = Math.max(latRange, lngRange) * (1 + padding * 2);
-            
+
             const centerLat = (bounds.north + bounds.south) / 2;
             const centerLng = (bounds.east + bounds.west) / 2;
-            
+
             // Convert coordinates to canvas pixels
             function toCanvasCoords(lng, lat) {
                 const x = ((lng - centerLng) / maxRange + 0.5) * canvasSize;
                 const y = ((centerLat - lat) / maxRange + 0.5) * canvasSize;  // Invert Y
                 return { x, y };
             }
-            
-            // Draw triangle
-            ctx.beginPath();
-            ctx.strokeStyle = '#00d4aa';
-            ctx.lineWidth = 4;
-            
-            const coords = currentTileData.coordinates;
-            const first = toCanvasCoords(coords[0][0], coords[0][1]);
-            ctx.moveTo(first.x, first.y);
-            
-            for (let i = 1; i < coords.length; i++) {
-                const point = toCanvasCoords(coords[i][0], coords[i][1]);
-                ctx.lineTo(point.x, point.y);
+
+            // Helper function to draw a triangle path
+            function drawTrianglePath(coords, strokeStyle, lineWidth, dashPattern = []) {
+                ctx.beginPath();
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = lineWidth;
+                ctx.setLineDash(dashPattern);
+
+                const first = toCanvasCoords(coords[0][0], coords[0][1]);
+                ctx.moveTo(first.x, first.y);
+
+                for (let i = 1; i < coords.length; i++) {
+                    const point = toCanvasCoords(coords[i][0], coords[i][1]);
+                    ctx.lineTo(point.x, point.y);
+                }
+
+                ctx.closePath();
+                ctx.stroke();
+                ctx.setLineDash([]);  // Reset dash pattern
             }
-            
-            ctx.closePath();
-            ctx.stroke();
+
+            // Draw sub-tiles first (behind main tile)
+            if (currentSubTiles && currentSubTiles.length > 0) {
+                currentSubTiles.forEach(subTile => {
+                    drawTrianglePath(subTile.coordinates, '#ffaa00', 2, [8, 4]);  // Orange, dashed
+                });
+            }
+
+            // Draw main triangle on top
+            drawTrianglePath(currentTileData.coordinates, '#00d4aa', 4);  // Teal, solid
         }
         
         // ============================================
