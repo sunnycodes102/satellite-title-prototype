@@ -136,7 +136,7 @@ const CAPTURE_CONFIG = {
     captureSize: 1300,        // Fixed large capture size in pixels
     targetScale: 100000,      // 1:100,000 scale
     dpi: 300,                 // Output DPI
-    padding: 100,              // Padding in pixels
+    padding: 0,              // Padding in pixels
     labelHeight: 60           // Label height in pixels
 };
 
@@ -201,6 +201,24 @@ function initMap() {
 
     // Draw the default triangle
     drawTriangle(DEFAULT_TILE.coordinates);
+
+    // Add coordinate display on mouse move (for manual testing)
+    map.on('mousemove', function(e) {
+        const lat = e.latlng.lat.toFixed(6);
+        const lng = e.latlng.lng.toFixed(6);
+        document.getElementById('display-center').textContent = `${lat}°, ${lng}° (cursor)`;
+    });
+
+    // Add click handler to log coordinates
+    map.on('click', function(e) {
+        const lat = e.latlng.lat.toFixed(6);
+        const lng = e.latlng.lng.toFixed(6);
+        console.log('📍 Clicked coordinates:', {
+            lat: parseFloat(lat),
+            lng: parseFloat(lng),
+            formatted: `[${lng}, ${lat}]`  // [lng, lat] format for GeoJSON
+        });
+    });
 }
 
 /**
@@ -281,8 +299,40 @@ function drawTriangle(coordinates) {
 
     console.log("========triangleLayer==========", triangleLayer.getBounds())
 
+    // Add vertex coordinate labels for manual verification
+    addVertexLabels(coordinates);
+
     // Fit map to triangle bounds
     map.fitBounds(triangleLayer.getBounds(), { padding: [10, 10] });
+}
+
+/**
+ * Add coordinate labels at triangle vertices for manual verification
+ */
+let vertexMarkers = [];
+function addVertexLabels(coordinates) {
+    // Remove existing markers
+    vertexMarkers.forEach(marker => map.removeLayer(marker));
+    vertexMarkers = [];
+
+    // Add markers at each vertex (first 3 points, skip closing point)
+    for (let i = 0; i < 3; i++) {
+        const lng = coordinates[i][0];
+        const lat = coordinates[i][1];
+
+        const marker = L.marker([lat, lng], {
+            icon: L.divIcon({
+                className: 'vertex-label',
+                html: `<div style="background: rgba(0,0,0,0.8); color: #00d4aa; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; font-family: 'JetBrains Mono', monospace;">
+                    V${i}: ${lat.toFixed(6)}°, ${lng.toFixed(6)}°
+                </div>`,
+                iconSize: [150, 30],
+                iconAnchor: [75, -5]
+            })
+        }).addTo(map);
+
+        vertexMarkers.push(marker);
+    }
 }
 
 /**
@@ -504,47 +554,64 @@ function calculateTriangleBounds(coordinates) {
 }
 
 /**
- * Wait for map tiles to fully load before capturing
- * Uses event listeners + timeout fallback for reliability
+ * Wait for map tiles to fully load AND render before capturing
+ * Uses event listeners + timeout fallback + extra render time for reliability
  * @param {L.TileLayer} tileLayer - Leaflet tile layer to wait for
- * @param {number} maxWait - Maximum wait time in milliseconds (default 5000)
- * @returns {Promise} Resolves when tiles loaded or timeout reached
+ * @param {number} maxWait - Maximum wait time in milliseconds (default 10000)
+ * @returns {Promise} Resolves when tiles loaded+rendered or timeout reached
  */
-function waitForTilesToLoad(tileLayer, maxWait = 5000) {
+function waitForTilesToLoad(tileLayer, maxWait = 10000) {
     return new Promise((resolve) => {
+        let loadedCount = 0;
+        let timeoutHandle = null;
+
+        const cleanup = () => {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            tileLayer.off('load', onLoad);
+            tileLayer.off('tileload', onTileLoad);
+        };
+
         // Check if tiles are already loaded
         if (tileLayer && !tileLayer._loading) {
-            console.log('✅ Tiles already loaded');
-            resolve();
+            console.log('✅ Tiles already loaded, waiting for render...');
+            // Still wait a bit for rendering to complete
+            setTimeout(() => resolve(), 300);
             return;
         }
 
-        console.log('⏳ Waiting for tiles to load...');
+        console.log('⏳ Waiting for tiles to load and render...');
 
-        // Set timeout as fallback (in case tiles fail or take too long)
-        const timeout = setTimeout(() => {
-            console.warn('⏱️ Tile loading timeout reached, proceeding anyway');
-            tileLayer.off('load', onLoad);
+        // Timeout fallback
+        timeoutHandle = setTimeout(() => {
+            console.warn(`⏱️ Tile loading timeout after ${maxWait}ms (${loadedCount} tiles loaded)`);
+            cleanup();
             resolve();
         }, maxWait);
 
-        // Listen for 'load' event (all tiles loaded)
-        const onLoad = () => {
-            clearTimeout(timeout);
-            console.log('✅ All tiles loaded successfully');
-            resolve();
-        };
-
-        tileLayer.once('load', onLoad);
-
-        // Also listen for individual tile loads to show progress
-        let loadedCount = 0;
-        tileLayer.on('tileload', () => {
+        // Track individual tile loads
+        const onTileLoad = () => {
             loadedCount++;
             if (loadedCount % 5 === 0) {
                 console.log(`📦 ${loadedCount} tiles loaded...`);
             }
-        });
+        };
+
+        // All tiles loaded event
+        const onLoad = () => {
+            console.log(`✅ All tiles loaded (${loadedCount} total), waiting for render...`);
+            cleanup();
+
+            // CRITICAL: Wait additional time for tiles to fully paint/render
+            // Tiles might be "loaded" but not yet rendered to canvas
+            setTimeout(() => {
+                console.log('✅ Render complete, ready to capture');
+                resolve();
+            }, 800);  // Extra time for rendering (increased from 0ms to 800ms)
+        };
+
+        // Attach listeners
+        tileLayer.on('tileload', onTileLoad);
+        tileLayer.once('load', onLoad);
     });
 }
 
@@ -744,9 +811,10 @@ async function generateImage() {
             }
         });
 
-        // Step 5: Wait for capture map tiles to fully load
+        // Step 5: Wait for capture map tiles to fully load AND render
         // This ensures satellite imagery is complete before capturing
-        await waitForTilesToLoad(captureTileLayer, 5000);
+        // Increased timeout for slow connections (15 seconds)
+        await waitForTilesToLoad(captureTileLayer, 15000);
 
         // Step 6: Capture the HIDDEN map (user never sees this)
         const canvas = await html2canvas(captureElement, {
