@@ -760,29 +760,11 @@ async function generateImage() {
 
         setStatus('Image generated successfully! Ready to download.', 'info');
     } catch (error) {
+        console.error('Error generating image:', error);
         setStatus('Error generating image: ' + error.message, 'error');
-
-        // Restore map container on error
-        mapContainer.style.height = originalHeight || '600px';
-        map.invalidateSize();
-
-        // Restore triangle visibility on error
-        if (triangleLayer) {
-            triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
-        }
-        subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
-
-        // Restore controls on error
-        if (attributionControl) attributionControl.style.display = '';
-        if (zoomControl) zoomControl.style.display = '';
+        // No cleanup needed - hidden map was used, visible map unchanged
     } finally {
-        // Restore original map container size
-        if (originalWidth && originalHeight) {
-            mapContainer.style.width = originalWidth;
-            mapContainer.style.height = originalHeight;
-            map.invalidateSize();
-        }
-
+        // Re-enable button
         btn.disabled = false;
         btn.textContent = 'Generate Satellite Image';
     }
