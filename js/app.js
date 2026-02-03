@@ -701,12 +701,18 @@ async function generateImage() {
 
         console.log('📊 Triangle bounding box:', bounds);
 
-        // Step 3: Ensure capture map is properly sized
+        // Step 3: Make capture map temporarily visible so tiles load
         const captureElement = document.getElementById('capture-map');
+
+        // CRITICAL: visibility:hidden prevents tile rendering!
+        // Temporarily make visible (but still behind visible map via z-index:-1)
+        captureElement.style.visibility = 'visible';
+        captureElement.style.opacity = '1';
+
         captureMap.invalidateSize();
 
         // Step 4: Set capture map to show triangle bounding box
-        // Note: User's visible map is NOT affected
+        // Note: User's visible map is NOT affected (stays on top)
         captureMap.fitBounds([
             [bounds.south, bounds.west],
             [bounds.north, bounds.east]
@@ -716,9 +722,9 @@ async function generateImage() {
         });
 
         // Wait for capture map to update
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 200));
 
-        // Step 4: Store captured zoom and bounds for scale calculation
+        // Step 5: Store captured zoom and bounds for scale calculation
         const capturedZoom = captureMap.getZoom();
         const actualBounds = captureMap.getBounds();
         capturedMapBounds = {
@@ -755,6 +761,10 @@ async function generateImage() {
             expectedSize: CAPTURE_CONFIG.captureSize
         });
 
+        // Hide capture map again (capture complete)
+        captureElement.style.visibility = 'hidden';
+        captureElement.style.opacity = '0';
+
         // Step 7: Process the captured image with scaling
         await processImageWithScaling(canvas, bounds, capturedZoom);
 
@@ -765,8 +775,14 @@ async function generateImage() {
     } catch (error) {
         console.error('Error generating image:', error);
         setStatus('Error generating image: ' + error.message, 'error');
-        // No cleanup needed - hidden map was used, visible map unchanged
     } finally {
+        // Ensure capture map is hidden again (even if error occurred)
+        const captureEl = document.getElementById('capture-map');
+        if (captureEl) {
+            captureEl.style.visibility = 'hidden';
+            captureEl.style.opacity = '0';
+        }
+
         // Re-enable button
         btn.disabled = false;
         btn.textContent = 'Generate Satellite Image';
