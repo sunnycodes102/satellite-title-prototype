@@ -140,9 +140,11 @@ const CAPTURE_CONFIG = {
     labelHeight: 60           // Label height in pixels
 };
 
-// Map instance
-let map = null;
+// Map instances
+let map = null;              // Visible map for user interaction
+let captureMap = null;       // Hidden map for image capture (user never sees this)
 let tileLayer = null;
+let captureTileLayer = null; // Tile layer for capture map
 let triangleLayer = null;
 let subTileLayers = [];  // Array to hold sub-tile polygon layers
 let currentTileData = { ...DEFAULT_TILE };
@@ -199,6 +201,41 @@ function initMap() {
 
     // Draw the default triangle
     drawTriangle(DEFAULT_TILE.coordinates);
+}
+
+/**
+ * Initialize the hidden capture map (lazy initialization)
+ * This map is used for image generation and is never visible to the user
+ */
+function initCaptureMap() {
+    if (captureMap) {
+        return; // Already initialized
+    }
+
+    console.log('🗺️ Initializing hidden capture map...');
+
+    // Create hidden map instance
+    captureMap = L.map('capture-map', {
+        zoomControl: false,
+        attributionControl: false,
+        boxZoom: false,
+        doubleClickZoom: false,
+        dragging: false,
+        keyboard: false,
+        scrollWheelZoom: false,
+        touchZoom: false
+    });
+
+    // Add same satellite tile layer as visible map
+    captureTileLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+            attribution: 'Tiles © Esri',
+            maxZoom: 19
+        }
+    ).addTo(captureMap);
+
+    console.log('✅ Hidden capture map initialized');
 }
 
 /**
@@ -467,6 +504,51 @@ function calculateTriangleBounds(coordinates) {
 }
 
 /**
+ * Wait for map tiles to fully load before capturing
+ * Uses event listeners + timeout fallback for reliability
+ * @param {L.TileLayer} tileLayer - Leaflet tile layer to wait for
+ * @param {number} maxWait - Maximum wait time in milliseconds (default 5000)
+ * @returns {Promise} Resolves when tiles loaded or timeout reached
+ */
+function waitForTilesToLoad(tileLayer, maxWait = 5000) {
+    return new Promise((resolve) => {
+        // Check if tiles are already loaded
+        if (tileLayer && !tileLayer._loading) {
+            console.log('✅ Tiles already loaded');
+            resolve();
+            return;
+        }
+
+        console.log('⏳ Waiting for tiles to load...');
+
+        // Set timeout as fallback (in case tiles fail or take too long)
+        const timeout = setTimeout(() => {
+            console.warn('⏱️ Tile loading timeout reached, proceeding anyway');
+            tileLayer.off('load', onLoad);
+            resolve();
+        }, maxWait);
+
+        // Listen for 'load' event (all tiles loaded)
+        const onLoad = () => {
+            clearTimeout(timeout);
+            console.log('✅ All tiles loaded successfully');
+            resolve();
+        };
+
+        tileLayer.once('load', onLoad);
+
+        // Also listen for individual tile loads to show progress
+        let loadedCount = 0;
+        tileLayer.on('tileload', () => {
+            loadedCount++;
+            if (loadedCount % 5 === 0) {
+                console.log(`📦 ${loadedCount} tiles loaded...`);
+            }
+        });
+    });
+}
+
+/**
  * Calculate square bounds that fit the entire triangle with proper scaling
  * The goal: E-W edge should be exactly trianglePixels (1277px) when rendered
  *
@@ -601,38 +683,27 @@ function calculateScaleFactor(capturedCanvas, capturedBounds, capturedZoom) {
 
 /**
  * Main function to generate the satellite image
+ * Uses a HIDDEN capture map - user's visible map remains unchanged
  */
 async function generateImage() {
     const btn = document.getElementById('generate-btn');
     btn.disabled = true;
     btn.textContent = 'Generating...';
 
-    setStatus('Centering and capturing satellite imagery...', 'info');
-
-    const mapContainer = document.querySelector('.map-container');
-    const mapElement = document.getElementById('map');
-
-    // Store original dimensions for restoration
-    let originalWidth = mapContainer.style.width;
-    let originalHeight = mapContainer.style.height;
-
-    // Get references to Leaflet controls for hiding/restoring
-    const attributionControl = document.querySelector('.leaflet-control-attribution');
-    const zoomControl = document.querySelector('.leaflet-control-zoom');
+    setStatus('Processing satellite imagery...', 'info');
 
     try {
-        // Step 1: Calculate triangle bounding box
+        // Step 1: Initialize hidden capture map if not already done
+        initCaptureMap();
+
+        // Step 2: Calculate triangle bounding box
         const bounds = calculateTriangleBounds(currentTileData.coordinates);
 
         console.log('📊 Triangle bounding box:', bounds);
 
-        // Step 2: Set container to FIXED large size (1300×1300px)
-        mapContainer.style.width = CAPTURE_CONFIG.captureSize + 'px';
-        mapContainer.style.height = CAPTURE_CONFIG.captureSize + 'px';
-        map.invalidateSize();
-
-        // Step 3: Fit map to show triangle bounding box
-        map.fitBounds([
+        // Step 3: Set capture map to show triangle bounding box
+        // Note: User's visible map is NOT affected
+        captureMap.fitBounds([
             [bounds.south, bounds.west],
             [bounds.north, bounds.east]
         ], {
@@ -640,12 +711,12 @@ async function generateImage() {
             animate: false
         });
 
-        // Wait for map to update
+        // Wait for capture map to update
         await new Promise(resolve => setTimeout(resolve, 100));
 
         // Step 4: Store captured zoom and bounds for scale calculation
-        const capturedZoom = map.getZoom();
-        const actualBounds = map.getBounds();
+        const capturedZoom = captureMap.getZoom();
+        const actualBounds = captureMap.getBounds();
         capturedMapBounds = {
             north: actualBounds.getNorth(),
             south: actualBounds.getSouth(),
@@ -653,7 +724,7 @@ async function generateImage() {
             west: actualBounds.getWest()
         };
 
-        console.log('📊 Map setup for capture:', {
+        console.log('📊 Capture map setup:', {
             containerSize: CAPTURE_CONFIG.captureSize,
             zoom: capturedZoom,
             bounds: capturedMapBounds,
@@ -663,20 +734,13 @@ async function generateImage() {
             }
         });
 
-        // Step 5: Hide overlays and controls for capture
-        if (triangleLayer) {
-            triangleLayer.setStyle({ opacity: 0, fillOpacity: 0 });
-        }
-        subTileLayers.forEach(layer => layer.setStyle({ opacity: 0 }));
+        // Step 5: Wait for capture map tiles to fully load
+        // This ensures satellite imagery is complete before capturing
+        await waitForTilesToLoad(captureTileLayer, 5000);
 
-        if (attributionControl) attributionControl.style.display = 'none';
-        if (zoomControl) zoomControl.style.display = 'none';
-
-        // Step 6: Wait for map tiles to load
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
-        // Step 7: Capture the map at large size
-        const canvas = await html2canvas(mapElement, {
+        // Step 6: Capture the HIDDEN map (user never sees this)
+        const captureElement = document.getElementById('capture-map');
+        const canvas = await html2canvas(captureElement, {
             useCORS: true,
             allowTaint: true,
             logging: false
@@ -688,21 +752,7 @@ async function generateImage() {
             expectedSize: CAPTURE_CONFIG.captureSize
         });
 
-        // Step 8: Restore map UI
-        mapContainer.style.height = originalHeight || '600px';
-        map.invalidateSize();
-
-        if (triangleLayer) {
-            triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
-        }
-        subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
-
-        if (attributionControl) attributionControl.style.display = '';
-        if (zoomControl) zoomControl.style.display = '';
-
-        drawTriangle(currentTileData.coordinates);
-
-        // Step 9: Process the captured image with scaling
+        // Step 7: Process the captured image with scaling
         await processImageWithScaling(canvas, bounds, capturedZoom);
 
         // Show download button
