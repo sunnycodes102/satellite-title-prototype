@@ -556,37 +556,41 @@ function calculateTriangleBounds(coordinates) {
 /**
  * Wait for map tiles to fully load AND render before capturing
  * Uses event listeners + timeout fallback + extra render time for reliability
+ * ENHANCED: Longer wait times, error tracking, multiple verification stages
  * @param {L.TileLayer} tileLayer - Leaflet tile layer to wait for
- * @param {number} maxWait - Maximum wait time in milliseconds (default 10000)
+ * @param {number} maxWait - Maximum wait time in milliseconds (default 20000)
  * @returns {Promise} Resolves when tiles loaded+rendered or timeout reached
  */
-function waitForTilesToLoad(tileLayer, maxWait = 10000) {
+function waitForTilesToLoad(tileLayer, maxWait = 20000) {
     return new Promise((resolve) => {
         let loadedCount = 0;
+        let errorCount = 0;
         let timeoutHandle = null;
 
         const cleanup = () => {
             if (timeoutHandle) clearTimeout(timeoutHandle);
             tileLayer.off('load', onLoad);
             tileLayer.off('tileload', onTileLoad);
+            tileLayer.off('tileerror', onTileError);
+            tileLayer.off('loading', onLoading);
         };
 
-        // Check if tiles are already loaded
-        if (tileLayer && !tileLayer._loading) {
-            console.log('✅ Tiles already loaded, waiting for render...');
-            // Still wait a bit for rendering to complete
-            setTimeout(() => resolve(), 300);
-            return;
-        }
-
         console.log('⏳ Waiting for tiles to load and render...');
+        console.log(`   Initial loading state: ${tileLayer._loading ? 'LOADING' : 'NOT LOADING'}`);
 
-        // Timeout fallback
+        // Timeout fallback (increased to 20 seconds)
         timeoutHandle = setTimeout(() => {
-            console.warn(`⏱️ Tile loading timeout after ${maxWait}ms (${loadedCount} tiles loaded)`);
+            console.warn(`⏱️ Tile loading timeout after ${maxWait}ms`);
+            console.warn(`   Loaded: ${loadedCount} tiles, Errors: ${errorCount} tiles`);
             cleanup();
+            // Still resolve - proceed with whatever we have
             resolve();
         }, maxWait);
+
+        // Detect when tile loading starts
+        const onLoading = () => {
+            console.log('🔄 Tile loading started...');
+        };
 
         // Track individual tile loads
         const onTileLoad = () => {
@@ -596,21 +600,36 @@ function waitForTilesToLoad(tileLayer, maxWait = 10000) {
             }
         };
 
-        // All tiles loaded event
-        const onLoad = () => {
-            console.log(`✅ All tiles loaded (${loadedCount} total), waiting for render...`);
-            cleanup();
-
-            // CRITICAL: Wait additional time for tiles to fully paint/render
-            // Tiles might be "loaded" but not yet rendered to canvas
-            setTimeout(() => {
-                console.log('✅ Render complete, ready to capture');
-                resolve();
-            }, 800);  // Extra time for rendering (increased from 0ms to 800ms)
+        // Track tile errors
+        const onTileError = (e) => {
+            errorCount++;
+            console.warn(`❌ Tile load error (${errorCount} total):`, e.tile?.src || 'unknown');
         };
 
-        // Attach listeners
+        // All tiles loaded event
+        const onLoad = () => {
+            console.log(`✅ All tiles loaded (${loadedCount} total, ${errorCount} errors)`);
+
+            // If no tiles loaded at all, something is wrong
+            if (loadedCount === 0) {
+                console.error('⚠️ WARNING: No tiles were loaded! Image may be blank.');
+            }
+
+            cleanup();
+
+            // CRITICAL: Wait LONGER for tiles to fully paint/render
+            // Increased from 800ms to 2000ms for better reliability
+            console.log('⏳ Waiting 2000ms for render and paint...');
+            setTimeout(() => {
+                console.log('✅ Render wait complete, ready to capture');
+                resolve();
+            }, 2000);
+        };
+
+        // Attach listeners (including error tracking and loading start)
+        tileLayer.on('loading', onLoading);
         tileLayer.on('tileload', onTileLoad);
+        tileLayer.on('tileerror', onTileError);
         tileLayer.once('load', onLoad);
     });
 }
@@ -813,8 +832,8 @@ async function generateImage() {
 
         // Step 5: Wait for capture map tiles to fully load AND render
         // This ensures satellite imagery is complete before capturing
-        // Increased timeout for slow connections (15 seconds)
-        await waitForTilesToLoad(captureTileLayer, 15000);
+        // ENHANCED: 25 second timeout + 2 second render wait = 27 seconds total
+        await waitForTilesToLoad(captureTileLayer, 25000);
 
         // Step 6: Capture the HIDDEN map (user never sees this)
         const canvas = await html2canvas(captureElement, {
