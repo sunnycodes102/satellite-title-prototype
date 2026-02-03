@@ -701,7 +701,11 @@ async function generateImage() {
 
         console.log('📊 Triangle bounding box:', bounds);
 
-        // Step 3: Set capture map to show triangle bounding box
+        // Step 3: Ensure capture map is properly sized
+        const captureElement = document.getElementById('capture-map');
+        captureMap.invalidateSize();
+
+        // Step 4: Set capture map to show triangle bounding box
         // Note: User's visible map is NOT affected
         captureMap.fitBounds([
             [bounds.south, bounds.west],
@@ -739,7 +743,6 @@ async function generateImage() {
         await waitForTilesToLoad(captureTileLayer, 5000);
 
         // Step 6: Capture the HIDDEN map (user never sees this)
-        const captureElement = document.getElementById('capture-map');
         const canvas = await html2canvas(captureElement, {
             useCORS: true,
             allowTaint: true,
