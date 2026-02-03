@@ -4,289 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Globe Tiles - Satellite Image Generator</title>
-    
+
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
+
     <!-- Google Font -->
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
-    
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        :root {
-            --bg-primary: #0a0a0f;
-            --bg-secondary: #12121a;
-            --accent: #00d4aa;
-            --accent-dim: #00a080;
-            --text-primary: #f0f0f5;
-            --text-secondary: #8888aa;
-            --border: #2a2a3a;
-        }
-        
-        body {
-            font-family: 'Space Grotesk', sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            min-height: 100vh;
-            padding: 24px;
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        
-        header {
-            margin-bottom: 32px;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 24px;
-        }
-        
-        h1 {
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-            margin-bottom: 8px;
-        }
-        
-        h1 span {
-            color: var(--accent);
-        }
-        
-        .subtitle {
-            color: var(--text-secondary);
-            font-size: 14px;
-        }
-        
-        .main-layout {
-            display: grid;
-            grid-template-columns: 320px 1fr;
-            gap: 24px;
-        }
-        
-        .panel {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 24px;
-        }
-        
-        .panel-title {
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-secondary);
-            margin-bottom: 20px;
-        }
-        
-        .input-group {
-            margin-bottom: 20px;
-        }
-        
-        label {
-            display: block;
-            font-size: 13px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-        }
-        
-        input[type="text"], input[type="file"] {
-            width: 100%;
-            padding: 12px 16px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 16px;
-            letter-spacing: 2px;
-        }
-        
-        input[type="text"]:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-        
-        input[type="text"]::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        .btn {
-            width: 100%;
-            padding: 14px 20px;
-            background: var(--accent);
-            color: var(--bg-primary);
-            border: none;
-            border-radius: 8px;
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .btn:hover {
-            background: var(--accent-dim);
-        }
-        
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .btn-secondary {
-            background: transparent;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-            margin-top: 12px;
-        }
-        
-        .btn-secondary:hover {
-            background: rgba(0, 212, 170, 0.1);
-        }
-        
-        .coordinates-display {
-            background: var(--bg-primary);
-            border-radius: 8px;
-            padding: 16px;
-            margin-top: 20px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            line-height: 1.8;
-        }
-        
-        .coord-label {
-            color: var(--accent);
-        }
-        
-        .coord-value {
-            color: var(--text-primary);
-        }
-        
-        .map-container {
-            position: relative;
-            height: 600px;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        
-        #map {
-            width: 100%;
-            height: 100%;
-        }
-        
-        .output-section {
-            margin-top: 24px;
-        }
-        
-        .preview-container {
-            background: var(--bg-primary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
-            text-align: center;
-        }
-        
-        #preview-canvas {
-            max-width: 100%;
-            border: 1px solid var(--border);
-        }
-        
-        .status {
-            margin-top: 16px;
-            padding: 12px 16px;
-            border-radius: 8px;
-            font-size: 13px;
-        }
-        
-        .status.info {
-            background: rgba(0, 212, 170, 0.1);
-            border: 1px solid var(--accent);
-            color: var(--accent);
-        }
-        
-        .status.error {
-            background: rgba(255, 80, 80, 0.1);
-            border: 1px solid #ff5050;
-            color: #ff5050;
-        }
-        
-        .hidden {
-            display: none;
-        }
-        
-        /* Triangle overlay on map */
-        .leaflet-overlay-pane svg path {
-            stroke: var(--accent);
-            stroke-width: 3;
-            fill: rgba(0, 212, 170, 0.15);
-        }
-        
-        /* File input styling */
-        .file-input-wrapper {
-            position: relative;
-        }
-        
-        .file-input-wrapper input[type="file"] {
-            position: absolute;
-            opacity: 0;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-        }
-        
-        .file-input-label {
-            display: block;
-            padding: 12px 16px;
-            background: var(--bg-primary);
-            border: 1px dashed var(--border);
-            border-radius: 8px;
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 13px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .file-input-wrapper:hover .file-input-label {
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-        
-        .specs {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-top: 20px;
-        }
-        
-        .spec-item {
-            background: var(--bg-primary);
-            padding: 12px;
-            border-radius: 8px;
-        }
-        
-        .spec-label {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-secondary);
-            margin-bottom: 4px;
-        }
-        
-        .spec-value {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 14px;
-            color: var(--accent);
-        }
-    </style>
+
+    <!-- Application CSS -->
+    <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
     <div class="container">
@@ -294,12 +20,12 @@
             <h1>Globe <span>Tiles</span></h1>
             <p class="subtitle">Satellite Image Generator for 3D Printed Earth Model</p>
         </header>
-        
+
         <div class="main-layout">
             <!-- Left Panel: Controls -->
             <div class="panel">
                 <div class="panel-title">Tile Configuration</div>
-                
+
                 <div class="input-group">
                     <label for="tile-code">Tile Code</label>
                     <input type="text" id="tile-code" placeholder="M713289" value="M713289">
@@ -315,41 +41,49 @@
                         <div class="file-input-label">Drop KML file or click to browse</div>
                     </div>
                 </div>
-                
+
                 <button class="btn" id="generate-btn" onclick="generateImage()">
                     Generate Satellite Image
                 </button>
-                
+
                 <button class="btn btn-secondary hidden" id="download-btn" onclick="downloadImage()">
                     Download PNG
                 </button>
-                
+
                 <div class="coordinates-display" id="coords-display">
                     <div><span class="coord-label">Status:</span> <span class="coord-value">Ready</span></div>
                     <div><span class="coord-label">Tile:</span> <span class="coord-value" id="display-tile">M713289</span></div>
                     <div><span class="coord-label">Center:</span> <span class="coord-value" id="display-center">-14.0719°, -71.5990°</span></div>
                 </div>
-                
+
                 <div class="specs">
+                    <div class="spec-item">
+                        <div class="spec-label">E-W Edge</div>
+                        <div class="spec-value" id="display-ew-edge">-- km</div>
+                    </div>
+                    <div class="spec-item">
+                        <div class="spec-label">Print Width</div>
+                        <div class="spec-value" id="display-print-width">-- cm</div>
+                    </div>
+                    <div class="spec-item">
+                        <div class="spec-label">Triangle Pixels</div>
+                        <div class="spec-value" id="display-triangle-pixels">-- px</div>
+                    </div>
+                    <div class="spec-item">
+                        <div class="spec-label">Tile Type</div>
+                        <div class="spec-value" id="display-tile-type">Normal</div>
+                    </div>
                     <div class="spec-item">
                         <div class="spec-label">Scale</div>
                         <div class="spec-value">1:100,000</div>
                     </div>
                     <div class="spec-item">
-                        <div class="spec-label">Output</div>
-                        <div class="spec-value">4.25"</div>
-                    </div>
-                    <div class="spec-item">
                         <div class="spec-label">DPI</div>
                         <div class="spec-value">300</div>
                     </div>
-                    <div class="spec-item">
-                        <div class="spec-label">Format</div>
-                        <div class="spec-value">PNG</div>
-                    </div>
                 </div>
             </div>
-            
+
             <!-- Right Panel: Map & Preview -->
             <div>
                 <div class="panel">
@@ -358,11 +92,11 @@
                         <div id="map"></div>
                     </div>
                 </div>
-                
+
                 <div class="panel output-section">
                     <div class="panel-title">Output Preview</div>
                     <div class="preview-container">
-                        <canvas id="preview-canvas" width="1275" height="1275"></canvas>
+                        <canvas id="preview-canvas" width="400" height="400"></canvas>
                     </div>
                     <div class="status info" id="status-message">
                         Click "Generate Satellite Image" to create your tile decal
@@ -371,532 +105,16 @@
             </div>
         </div>
     </div>
-    
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-    <!-- html2canvas for capturing map -->
+    <!-- External Libraries -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
-    <!-- TileLookup - Geodesic tile coordinate calculator -->
+    <!-- Application Scripts -->
     <script src="lib/TileLookup.js"></script>
-    
-    <script>
-        // ============================================
-        // CONFIGURATION
-        // ============================================
-        
-        // Default tile data for M713289 (from the KML file)
-        const DEFAULT_TILE = {
-            code: 'M713289',
-            // Triangle coordinates [lng, lat]
-            coordinates: [
-                [-71.548858, -14.100060],
-                [-71.599134, -14.015646],
-                [-71.649112, -14.100223],
-                [-71.548858, -14.100060]  // Close the triangle
-            ]
-        };
-        
-        // Output specifications
-        const OUTPUT_CONFIG = {
-            dpi: 300,
-            inches: 4.25,
-            scale: 100000,  // 1:100,000
-            get pixels() { return this.dpi * this.inches; }  // 1275px
-        };
-        
-        // Map instance
-        let map = null;
-        let tileLayer = null;
-        let triangleLayer = null;
-        let subTileLayers = [];  // Array to hold sub-tile polygon layers
-        let currentTileData = { ...DEFAULT_TILE };
-        let currentSubTiles = [];  // Array of 9 sub-tile coordinate sets
-
-        // TileLookup instance for converting tile codes to coordinates
-        let tileLookup = null;
-        
-        // ============================================
-        // INITIALIZATION
-        // ============================================
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            // Initialize TileLookup
-            tileLookup = new TileLookup();
-
-            initMap();
-            updateDisplay();
-
-            // Add Enter key handler for tile code input
-            document.getElementById('tile-code').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    loadTileFromCode();
-                }
-            });
-        });
-        
-        /**
-         * Initialize the Leaflet map with Esri satellite imagery
-         */
-        function initMap() {
-            // Calculate center of the default triangle
-            const center = calculateCenter(DEFAULT_TILE.coordinates);
-            
-            // Create map
-            map = L.map('map', {
-                center: [center.lat, center.lng],
-                zoom: 13,
-                zoomControl: true
-            });
-            
-            // Add Esri World Imagery (free satellite basemap)
-            tileLayer = L.tileLayer(
-                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                {
-                    attribution: 'Tiles © Esri',
-                    maxZoom: 19
-                }
-            ).addTo(map);
-            
-            // Draw the default triangle
-            drawTriangle(DEFAULT_TILE.coordinates);
-        }
-        
-        /**
-         * Draw triangle overlay on the map (main tile + 9 sub-tiles)
-         */
-        function drawTriangle(coordinates) {
-            // Remove existing triangle if any
-            if (triangleLayer) {
-                map.removeLayer(triangleLayer);
-            }
-
-            // Remove existing sub-tile layers
-            subTileLayers.forEach(layer => map.removeLayer(layer));
-            subTileLayers = [];
-
-            // Convert to Leaflet format [lat, lng]
-            const latLngs = coordinates.map(coord => [coord[1], coord[0]]);
-
-            // Create main polygon
-            triangleLayer = L.polygon(latLngs, {
-                color: '#00d4aa',
-                weight: 3,
-                fillColor: '#00d4aa',
-                fillOpacity: 0.15
-            }).addTo(map);
-
-            // Get and draw sub-tiles if we have a valid tile code
-            if (currentTileData.code && tileLookup) {
-                currentSubTiles = getSubTileCoordinates(currentTileData.code);
-
-                currentSubTiles.forEach(subTile => {
-                    const subLatLngs = subTile.coordinates.map(coord => [coord[1], coord[0]]);
-                    const subLayer = L.polygon(subLatLngs, {
-                        color: '#ffaa00',  // Orange for sub-tiles
-                        weight: 2,
-                        fillColor: 'transparent',
-                        fillOpacity: 0,
-                        dashArray: '5, 5'  // Dashed line
-                    }).addTo(map);
-                    subTileLayers.push(subLayer);
-                });
-            }
-
-            // Fit map to triangle bounds
-            map.fitBounds(triangleLayer.getBounds(), { padding: [50, 50] });
-        }
-        
-        /**
-         * Calculate center point of coordinates
-         */
-        function calculateCenter(coordinates) {
-            // Exclude the closing point (last point = first point)
-            const points = coordinates.slice(0, -1);
-            
-            const sumLat = points.reduce((sum, c) => sum + c[1], 0);
-            const sumLng = points.reduce((sum, c) => sum + c[0], 0);
-            
-            return {
-                lat: sumLat / points.length,
-                lng: sumLng / points.length
-            };
-        }
-        
-        /**
-         * Calculate bounding box of coordinates
-         */
-        function calculateBounds(coordinates) {
-            const lats = coordinates.map(c => c[1]);
-            const lngs = coordinates.map(c => c[0]);
-
-            return {
-                north: Math.max(...lats),
-                south: Math.min(...lats),
-                east: Math.max(...lngs),
-                west: Math.min(...lngs)
-            };
-        }
-
-        /**
-         * Get coordinates for all 9 sub-tiles of a given tile code
-         * @param {string} tileCode - Parent tile code (e.g., "M713289")
-         * @returns {Array} Array of 9 sub-tile coordinate arrays
-         */
-        function getSubTileCoordinates(tileCode) {
-            const subTiles = [];
-
-            for (let i = 1; i <= 9; i++) {
-                const subTileCode = tileCode + i;
-                try {
-                    const locations = tileLookup.nameToLocations(subTileCode);
-                    // Convert to [lng, lat] format and close the triangle
-                    const coords = [
-                        [locations[0][1], locations[0][0]],
-                        [locations[1][1], locations[1][0]],
-                        [locations[2][1], locations[2][0]],
-                        [locations[0][1], locations[0][0]]  // Close
-                    ];
-                    subTiles.push({
-                        code: subTileCode,
-                        coordinates: coords
-                    });
-                } catch (e) {
-                    console.warn('Could not get sub-tile:', subTileCode, e);
-                }
-            }
-
-            return subTiles;
-        }
-
-        // ============================================
-        // KML PARSING
-        // ============================================
-        
-        /**
-         * Parse KML file and extract main tile coordinates
-         */
-        function parseKML(kmlText) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(kmlText, 'text/xml');
-            
-            // Get all placemarks
-            const placemarks = doc.querySelectorAll('Placemark');
-            
-            if (placemarks.length === 0) {
-                throw new Error('No placemarks found in KML');
-            }
-            
-            // Get the first placemark (main tile)
-            const firstPlacemark = placemarks[0];
-            const name = firstPlacemark.querySelector('n')?.textContent || 
-                        firstPlacemark.querySelector('name')?.textContent || 
-                        'Unknown';
-            
-            const coordsText = firstPlacemark.querySelector('coordinates')?.textContent;
-            
-            if (!coordsText) {
-                throw new Error('No coordinates found in KML');
-            }
-            
-            // Parse coordinates
-            const coordinates = coordsText.trim().split('\n').map(line => {
-                const parts = line.trim().split(',');
-                return [parseFloat(parts[0]), parseFloat(parts[1])];
-            });
-            
-            return {
-                code: name,
-                coordinates: coordinates
-            };
-        }
-        
-        // ============================================
-        // TILE CODE LOADING
-        // ============================================
-
-        /**
-         * Load tile coordinates from tile code using TileLookup
-         */
-        function loadTileFromCode() {
-            const tileCode = document.getElementById('tile-code').value.trim().toUpperCase();
-
-            if (!tileCode) {
-                setStatus('Please enter a tile code', 'error');
-                return;
-            }
-
-            // Validate format: 1 letter (A-T) + 1-6 digits (1-9)
-            const validPattern = /^[A-T][1-9]{1,6}$/;
-            if (!validPattern.test(tileCode)) {
-                setStatus('Invalid tile code. Format: Letter (A-T) + 1-6 digits (1-9). Example: M713289', 'error');
-                return;
-            }
-
-            try {
-                // Get coordinates from tile code
-                const locations = tileLookup.nameToLocations(tileCode);
-
-                // Convert to our coordinate format [lng, lat] and close the triangle
-                const coordinates = [
-                    [locations[0][1], locations[0][0]],  // [lng, lat]
-                    [locations[1][1], locations[1][0]],
-                    [locations[2][1], locations[2][0]],
-                    [locations[0][1], locations[0][0]]   // Close the triangle
-                ];
-
-                // Update current tile data
-                currentTileData = {
-                    code: tileCode,
-                    coordinates: coordinates
-                };
-
-                // Update map
-                drawTriangle(currentTileData.coordinates);
-
-                // Update display
-                updateDisplay();
-
-                setStatus('Tile loaded: ' + tileCode, 'info');
-            } catch (error) {
-                setStatus('Error loading tile: ' + error.message, 'error');
-            }
-        }
-
-        // ============================================
-        // FILE HANDLING
-        // ============================================
-
-        document.getElementById('kml-file').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            
-            const reader = new FileReader();
-            reader.onload = function(event) {
-                try {
-                    const kmlText = event.target.result;
-                    currentTileData = parseKML(kmlText);
-                    
-                    // Update tile code input
-                    document.getElementById('tile-code').value = currentTileData.code;
-                    
-                    // Update map
-                    drawTriangle(currentTileData.coordinates);
-                    
-                    // Update display
-                    updateDisplay();
-                    
-                    setStatus('KML loaded: ' + currentTileData.code, 'info');
-                } catch (error) {
-                    setStatus('Error parsing KML: ' + error.message, 'error');
-                }
-            };
-            reader.readAsText(file);
-        });
-        
-        // ============================================
-        // IMAGE GENERATION
-        // ============================================
-        
-        /**
-         * Main function to generate the satellite image
-         */
-        async function generateImage() {
-            const btn = document.getElementById('generate-btn');
-            btn.disabled = true;
-            btn.textContent = 'Generating...';
-            
-            setStatus('Capturing satellite imagery...', 'info');
-            
-            try {
-                // Hide the triangle overlay temporarily for capture
-                if (triangleLayer) {
-                    triangleLayer.setStyle({ opacity: 0, fillOpacity: 0 });
-                }
-                // Hide sub-tile layers
-                subTileLayers.forEach(layer => layer.setStyle({ opacity: 0 }));
-
-                // Wait for tiles to load
-                await new Promise(resolve => setTimeout(resolve, 1000));
-
-                // Capture the map
-                const mapElement = document.getElementById('map');
-                const canvas = await html2canvas(mapElement, {
-                    useCORS: true,
-                    allowTaint: true,
-                    logging: false
-                });
-
-                // Restore triangle visibility
-                if (triangleLayer) {
-                    triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
-                }
-                // Restore sub-tile layers
-                subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
-                
-                // Process the captured image
-                await processImage(canvas);
-                
-                // Show download button
-                document.getElementById('download-btn').classList.remove('hidden');
-                
-                setStatus('Image generated successfully! Ready to download.', 'info');
-            } catch (error) {
-                setStatus('Error generating image: ' + error.message, 'error');
-
-                // Restore triangle visibility on error
-                if (triangleLayer) {
-                    triangleLayer.setStyle({ opacity: 1, fillOpacity: 0.15 });
-                }
-                // Restore sub-tile layers on error
-                subTileLayers.forEach(layer => layer.setStyle({ opacity: 1 }));
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Generate Satellite Image';
-            }
-        }
-        
-        /**
-         * Process captured image: resize, add label, prepare for export
-         */
-        async function processImage(sourceCanvas) {
-            const outputCanvas = document.getElementById('preview-canvas');
-            const ctx = outputCanvas.getContext('2d');
-            
-            // Output dimensions (4.25" at 300 DPI = 1275px)
-            const outputSize = OUTPUT_CONFIG.pixels;
-            const labelHeight = 60;  // Space for tile label
-            
-            // Set canvas size
-            outputCanvas.width = outputSize;
-            outputCanvas.height = outputSize + labelHeight;
-            
-            // Fill background
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
-            
-            // Draw the satellite image (cropped to square)
-            const sourceSize = Math.min(sourceCanvas.width, sourceCanvas.height);
-            const sourceX = (sourceCanvas.width - sourceSize) / 2;
-            const sourceY = (sourceCanvas.height - sourceSize) / 2;
-            
-            ctx.drawImage(
-                sourceCanvas,
-                sourceX, sourceY, sourceSize, sourceSize,  // Source crop
-                0, 0, outputSize, outputSize               // Destination
-            );
-            
-            // Draw triangle boundary overlay
-            drawTriangleOnCanvas(ctx, outputSize);
-            
-            // Add tile label at the bottom (east-west edge)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, outputSize, outputSize, labelHeight);
-            
-            ctx.fillStyle = '#000000';
-            ctx.font = 'bold 36px "JetBrains Mono", monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(currentTileData.code, outputSize / 2, outputSize + labelHeight / 2);
-        }
-        
-        /**
-         * Draw triangle boundary on the output canvas (main tile + sub-tiles)
-         */
-        function drawTriangleOnCanvas(ctx, canvasSize) {
-            const bounds = calculateBounds(currentTileData.coordinates);
-            const padding = 0.05;  // 5% padding
-
-            // Calculate scale
-            const latRange = bounds.north - bounds.south;
-            const lngRange = bounds.east - bounds.west;
-            const maxRange = Math.max(latRange, lngRange) * (1 + padding * 2);
-
-            const centerLat = (bounds.north + bounds.south) / 2;
-            const centerLng = (bounds.east + bounds.west) / 2;
-
-            // Convert coordinates to canvas pixels
-            function toCanvasCoords(lng, lat) {
-                const x = ((lng - centerLng) / maxRange + 0.5) * canvasSize;
-                const y = ((centerLat - lat) / maxRange + 0.5) * canvasSize;  // Invert Y
-                return { x, y };
-            }
-
-            // Helper function to draw a triangle path
-            function drawTrianglePath(coords, strokeStyle, lineWidth, dashPattern = []) {
-                ctx.beginPath();
-                ctx.strokeStyle = strokeStyle;
-                ctx.lineWidth = lineWidth;
-                ctx.setLineDash(dashPattern);
-
-                const first = toCanvasCoords(coords[0][0], coords[0][1]);
-                ctx.moveTo(first.x, first.y);
-
-                for (let i = 1; i < coords.length; i++) {
-                    const point = toCanvasCoords(coords[i][0], coords[i][1]);
-                    ctx.lineTo(point.x, point.y);
-                }
-
-                ctx.closePath();
-                ctx.stroke();
-                ctx.setLineDash([]);  // Reset dash pattern
-            }
-
-            // Draw sub-tiles first (behind main tile)
-            if (currentSubTiles && currentSubTiles.length > 0) {
-                currentSubTiles.forEach(subTile => {
-                    drawTrianglePath(subTile.coordinates, '#ffaa00', 2, [8, 4]);  // Orange, dashed
-                });
-            }
-
-            // Draw main triangle on top
-            drawTrianglePath(currentTileData.coordinates, '#00d4aa', 4);  // Teal, solid
-        }
-        
-        // ============================================
-        // DOWNLOAD
-        // ============================================
-        
-        /**
-         * Download the generated image as PNG
-         */
-        function downloadImage() {
-            const canvas = document.getElementById('preview-canvas');
-            const tileCode = currentTileData.code;
-            
-            // Create download link
-            const link = document.createElement('a');
-            link.download = `${tileCode}_satellite_decal.png`;
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-            
-            setStatus(`Downloaded: ${tileCode}_satellite_decal.png`, 'info');
-        }
-        
-        // ============================================
-        // UI HELPERS
-        // ============================================
-        
-        /**
-         * Update the display panel
-         */
-        function updateDisplay() {
-            const center = calculateCenter(currentTileData.coordinates);
-            
-            document.getElementById('display-tile').textContent = currentTileData.code;
-            document.getElementById('display-center').textContent = 
-                `${center.lat.toFixed(4)}°, ${center.lng.toFixed(4)}°`;
-        }
-        
-        /**
-         * Set status message
-         */
-        function setStatus(message, type) {
-            const statusEl = document.getElementById('status-message');
-            statusEl.textContent = message;
-            statusEl.className = 'status ' + type;
-        }
-    </script>
+    <script src="js/changeDPI.js"></script>
+    <script src="js/changeDPI-alternative.js"></script>
+    <script src="js/verify-png-dpi.js"></script>
+    <script src="js/app.js"></script>
 </body>
 </html>
