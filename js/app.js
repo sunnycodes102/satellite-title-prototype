@@ -1062,15 +1062,15 @@ async function processImageWithScaling(capturedCanvas, triangleBounds, capturedZ
     drawTriangleOnCanvas(ctx, canvasWidth, canvasHeight, rotationAngle, scaledWidth, scaledHeight);
 
     // 11. Add label at bottom
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#373435';
     ctx.fillRect(0, canvasHeight, canvasWidth, labelHeight);
 
-    ctx.fillStyle = '#000000';
+    ctx.fillStyle = '#ffffffff';
     ctx.font = 'bold 36px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const labelText = `${currentTileData.code}  |  ${ewEdge.length.toFixed(2)} km  |  ${triangleSize}px`;
+    const labelText = `${currentTileData.code}`;
     ctx.fillText(labelText, canvasWidth / 2, canvasHeight + labelHeight / 2);
 
     // Store final dimensions
