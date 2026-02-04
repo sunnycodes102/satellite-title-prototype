@@ -578,6 +578,17 @@ function waitForTilesToLoad(tileLayer, maxWait = 20000) {
         console.log('⏳ Waiting for tiles to load and render...');
         console.log(`   Initial loading state: ${tileLayer._loading ? 'LOADING' : 'NOT LOADING'}`);
 
+        // Check if tiles are already loaded/cached
+        if (!tileLayer._loading && tileLayer._tiles && Object.keys(tileLayer._tiles).length > 0) {
+            const cachedTileCount = Object.keys(tileLayer._tiles).length;
+            console.log(`✅ Tiles already in cache (${cachedTileCount} tiles), waiting for render...`);
+            setTimeout(() => {
+                console.log('✅ Render wait complete, ready to capture');
+                resolve();
+            }, 2000);
+            return;
+        }
+
         // Timeout fallback (increased to 20 seconds)
         timeoutHandle = setTimeout(() => {
             console.warn(`⏱️ Tile loading timeout after ${maxWait}ms`);
@@ -810,8 +821,11 @@ async function generateImage() {
             animate: false
         });
 
-        // Wait for capture map to update
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Wait for capture map to update (increased from 200ms to 500ms)
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Force tile layer to refresh (Esri-specific fix for cached tiles)
+        captureTileLayer.redraw();
 
         // Step 5: Store captured zoom and bounds for scale calculation
         const capturedZoom = captureMap.getZoom();
