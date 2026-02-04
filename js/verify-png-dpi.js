@@ -159,11 +159,11 @@ function createDPIVerifier() {
     });
 }
 
-// Auto-load verifier on page load
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createDPIVerifier);
-} else {
-    createDPIVerifier();
-}
+// // Auto-load verifier on page load
+// if (document.readyState === 'loading') {
+//     document.addEventListener('DOMContentLoaded', createDPIVerifier);
+// } else {
+//     createDPIVerifier();
+// }
 
 console.log('✓ PNG DPI Verifier loaded - Check bottom-right corner');
