@@ -729,18 +729,19 @@ function calculateCenteredSquareBounds(coordinates, paddingRatio, ewEdge) {
 function calculateScaleFactor(capturedCanvas, capturedBounds, capturedZoom) {
     const ewEdge = currentTileData.ewEdge || findEWEdge(currentTileData.coordinates);
 
-    // 1. Calculate actual scale of captured image
+    // 1. Calculate actual scale of captured image from ACTUAL canvas dimensions
     const centerLat = (capturedBounds.north + capturedBounds.south) / 2;
     const centerLatRad = centerLat * Math.PI / 180;
 
-    // Calculate meters per pixel at this zoom level
-    const earthCircumference = 2 * Math.PI * 6378137;
-    const metersPerPixelAtZoom = (earthCircumference * Math.cos(centerLatRad)) /
-                                  (256 * Math.pow(2, capturedZoom));
+    // Calculate meters per pixel based on ACTUAL canvas width and geographic range
+    const lngRange = capturedBounds.east - capturedBounds.west;
+    const metersPerDegreeLng = 111320 * Math.cos(centerLatRad);  // Meters per degree longitude at this latitude
+    const totalWidthMeters = lngRange * metersPerDegreeLng;
+    const metersPerPixel = totalWidthMeters / capturedCanvas.width;
 
-    // 2. Calculate how many pixels the E-W edge occupies in captured image
+    // 2. Calculate how many pixels the E-W edge occupies in THIS canvas
     const ewEdgeMeters = ewEdge.length * 1000;  // km to meters
-    const ewEdgePixelsInCapture = ewEdgeMeters / metersPerPixelAtZoom;
+    const ewEdgePixelsInCapture = ewEdgeMeters / metersPerPixel;
 
     // 3. Calculate target pixels for 1:100,000 scale at 300 DPI
     // At 1:100,000: 1 km = 1 cm
@@ -752,7 +753,9 @@ function calculateScaleFactor(capturedCanvas, capturedBounds, capturedZoom) {
 
     console.log('📊 Scale calculation:', {
         capturedZoom,
-        metersPerPixelAtZoom,
+        canvasWidth: capturedCanvas.width,
+        lngRange,
+        metersPerPixel,
         ewEdgeMeters,
         ewEdgePixelsInCapture,
         targetEWEdgePixels,
@@ -968,51 +971,59 @@ async function processImageWithScaling(capturedCanvas, triangleBounds, capturedZ
     const scaleInfo = calculateScaleFactor(croppedCanvas, croppedMapBounds, capturedZoom);
     const scaleFactor = scaleInfo.scaleFactor;
 
-    // 3. Calculate output dimensions
+    // 3. Calculate output dimensions based on SCALED image (not square!)
     const ewEdge = currentTileData.ewEdge || findEWEdge(currentTileData.coordinates);
     const triangleSize = Math.round(scaleInfo.targetEWEdgePixels);  // e.g., 1277px
-    const canvasSize = triangleSize + (CAPTURE_CONFIG.padding * 2);  // e.g., 1297px
-    const labelHeight = CAPTURE_CONFIG.labelHeight;
 
-    console.log("=========Output Dimensions========", {
-        triangleSize,
-        canvasSize,
-        padding: CAPTURE_CONFIG.padding,
-        ewEdge: ewEdge.length,
-        scaleFactor
-    });
-
-    // 4. Set output canvas size
-    outputCanvas.width = canvasSize;
-    outputCanvas.height = canvasSize + labelHeight;
-
-    // 5. Fill background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
-
-    // 6. Create intermediate canvas for scaling
+    // 4. Create intermediate canvas for scaling
     const scaledCanvas = document.createElement('canvas');
-    const scaledSize = Math.round(croppedCanvas.width * scaleFactor);
-    scaledCanvas.width = scaledSize;
-    scaledCanvas.height = scaledSize;
+    // Apply scale factor to BOTH dimensions separately (preserves aspect ratio!)
+    const scaledWidth = Math.round(croppedCanvas.width * scaleFactor);
+    const scaledHeight = Math.round(croppedCanvas.height * scaleFactor);
+    scaledCanvas.width = scaledWidth;
+    scaledCanvas.height = scaledHeight;
 
     const scaledCtx = scaledCanvas.getContext('2d');
 
-    // 7. Scale the CROPPED image with high-quality smoothing
+    // 5. Scale the CROPPED image with high-quality smoothing
     scaledCtx.imageSmoothingEnabled = true;
     scaledCtx.imageSmoothingQuality = 'high';
     scaledCtx.drawImage(
         croppedCanvas,  // Use cropped canvas, not original captured
         0, 0, croppedCanvas.width, croppedCanvas.height,
-        0, 0, scaledSize, scaledSize
+        0, 0, scaledWidth, scaledHeight  // Use separate width/height!
     );
 
     console.log('📊 Image scaling:', {
         originalCapturedSize: capturedCanvas.width,
         croppedSize: croppedCanvas.width.toFixed(2) + '×' + croppedCanvas.height.toFixed(2),
-        scaledSize: scaledSize,
+        scaledSize: scaledWidth + '×' + scaledHeight,
         scaleFactor: scaleFactor
     });
+
+    // 6. Set output canvas size - use ACTUAL dimensions (preserves aspect ratio!)
+    const labelHeight = CAPTURE_CONFIG.labelHeight;
+    const canvasWidth = scaledWidth + (CAPTURE_CONFIG.padding * 2);
+    const canvasHeight = scaledHeight + (CAPTURE_CONFIG.padding * 2);
+
+    outputCanvas.width = canvasWidth;
+    outputCanvas.height = canvasHeight + labelHeight;
+
+    console.log("=========Output Dimensions========", {
+        triangleSize,
+        canvasWidth,
+        canvasHeight,
+        scaledWidth,
+        scaledHeight,
+        aspectRatio: (canvasWidth / canvasHeight).toFixed(3),
+        padding: CAPTURE_CONFIG.padding,
+        ewEdge: ewEdge.length,
+        scaleFactor
+    });
+
+    // 7. Fill background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
     // 8. Get rotation angle
     const inverted = currentTileData.isInverted !== undefined ?
@@ -1022,37 +1033,36 @@ async function processImageWithScaling(capturedCanvas, triangleBounds, capturedZ
 
     // 9. Draw scaled image to output canvas with rotation
     ctx.save();
-    ctx.translate(canvasSize / 2, canvasSize / 2);
-    ctx.rotate(-rotationAngle);  // Negative to counteract the angle
+    ctx.translate(canvasWidth / 2, canvasHeight / 2);
+    ctx.rotate(-rotationAngle);
 
-    // Draw scaled image centered
+    // Draw scaled image centered (using actual dimensions, not square!)
     ctx.drawImage(
         scaledCanvas,
-        0, 0, scaledSize, scaledSize,
-        -canvasSize / 2, -canvasSize / 2, canvasSize, canvasSize
+        0, 0, scaledWidth, scaledHeight,
+        -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight
     );
     ctx.restore();
 
     // 10. Draw triangle overlay with correct coordinate mapping
-    // Pass the scaled size for coordinate mapping
-    drawTriangleOnCanvas(ctx, canvasSize, rotationAngle, scaledSize);
+    drawTriangleOnCanvas(ctx, canvasWidth, canvasHeight, rotationAngle, scaledWidth, scaledHeight);
 
     // 11. Add label at bottom
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, canvasSize, canvasSize, labelHeight);
+    ctx.fillRect(0, canvasHeight, canvasWidth, labelHeight);
 
     ctx.fillStyle = '#000000';
     ctx.font = 'bold 36px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const labelText = `${currentTileData.code}  |  ${ewEdge.length.toFixed(2)} km  |  ${triangleSize}px  |  ${inverted ? '↓ Inverted' : '△ Normal'}`;
-    ctx.fillText(labelText, canvasSize / 2, canvasSize + labelHeight / 2);
+    const labelText = `${currentTileData.code}  |  ${ewEdge.length.toFixed(2)} km  |  ${triangleSize}px`;
+    ctx.fillText(labelText, canvasWidth / 2, canvasHeight + labelHeight / 2);
 
     // Store final dimensions
     currentTileData.trianglePixels = triangleSize;
-    currentTileData.outputPixels = canvasSize;
-    currentTileData.sourceCanvasSize = scaledSize;
+    currentTileData.outputPixels = { width: canvasWidth, height: canvasHeight };
+    currentTileData.sourceCanvasSize = { width: scaledWidth, height: scaledHeight };
 
     // Restore original bounds
     capturedMapBounds = originalBounds;
@@ -1061,11 +1071,13 @@ async function processImageWithScaling(capturedCanvas, triangleBounds, capturedZ
 /**
  * Draw triangle boundary on the output canvas (main tile + sub-tiles)
  * @param {CanvasRenderingContext2D} ctx - Canvas context
- * @param {number} canvasSize - Size of the output canvas
+ * @param {number} canvasWidth - Width of the output canvas
+ * @param {number} canvasHeight - Height of the output canvas
  * @param {number} rotationAngle - Rotation angle in radians (optional)
- * @param {number} sourceCanvasSize - Size of the source captured canvas (for scale compensation)
+ * @param {number} scaledWidth - Width of the scaled source canvas (for scale compensation)
+ * @param {number} scaledHeight - Height of the scaled source canvas (for scale compensation)
  */
-function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSize = null) {
+function drawTriangleOnCanvas(ctx, canvasWidth, canvasHeight, rotationAngle = 0, scaledWidth = null, scaledHeight = null) {
     // Use the actual map bounds that were captured, not calculated tile bounds
     // This ensures the triangle aligns with the satellite imagery
     const bounds = capturedMapBounds || calculateBounds(currentTileData.coordinates);
@@ -1077,14 +1089,22 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
     const centerLat = (bounds.north + bounds.south) / 2;
     const centerLng = (bounds.east + bounds.west) / 2;
 
-    // Calculate scale factor between source and output canvas
-    // If source was 1185px but output is 1297px, scaleFactor = 1297/1185 = 1.094
-    const scaleFactor = sourceCanvasSize ? (canvasSize / sourceCanvasSize) : 1.0;
+    // Use separate base dimensions for non-square canvases
+    // These represent the dimensions before padding was added
+    const baseWidth = scaledWidth || canvasWidth;
+    const baseHeight = scaledHeight || canvasHeight;
+
+    // Calculate scale factors (should be 1.0 if no padding, or slightly > 1.0 with padding)
+    const scaleFactorX = scaledWidth ? (canvasWidth / scaledWidth) : 1.0;
+    const scaleFactorY = scaledHeight ? (canvasHeight / scaledHeight) : 1.0;
 
     console.log('🎨 Drawing triangle on canvas:', {
-        canvasSize: canvasSize,
-        sourceCanvasSize: sourceCanvasSize,
-        scaleFactor: scaleFactor,
+        canvasWidth: canvasWidth,
+        canvasHeight: canvasHeight,
+        scaledWidth: scaledWidth,
+        scaledHeight: scaledHeight,
+        scaleFactorX: scaleFactorX,
+        scaleFactorY: scaleFactorY,
         rotationAngle: rotationAngle,
         capturedBounds: bounds,
         latRange: latRange,
@@ -1094,12 +1114,10 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
     // Convert coordinates to canvas pixels (before rotation)
     function toCanvasCoords(lng, lat) {
         // Map coordinates to canvas pixels using the actual captured bounds
-        // First map to the SOURCE canvas size, then scale to OUTPUT canvas size
         // x: longitude maps to horizontal position
         // y: latitude maps to vertical position (inverted because canvas Y increases downward)
-        const baseSize = sourceCanvasSize || canvasSize;
-        let x = ((lng - centerLng) / lngRange) * baseSize;
-        let y = ((centerLat - lat) / latRange) * baseSize;  // Invert Y
+        let x = ((lng - centerLng) / lngRange) * baseWidth;
+        let y = ((centerLat - lat) / latRange) * baseHeight;  // Invert Y
 
         // Apply rotation around center
         if (rotationAngle !== 0) {
@@ -1111,14 +1129,14 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
             y = rotY;
         }
 
-        // Scale from source to output canvas size
-        x = x * scaleFactor;
-        y = y * scaleFactor;
+        // Scale from source to output canvas size (accounts for padding)
+        x = x * scaleFactorX;
+        y = y * scaleFactorY;
 
-        // Translate to canvas coordinates
+        // Translate to canvas coordinates (center of canvas)
         return {
-            x: x + canvasSize / 2,
-            y: y + canvasSize / 2
+            x: x + canvasWidth / 2,
+            y: y + canvasHeight / 2
         };
     }
 
@@ -1130,9 +1148,9 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
         triangleVerticesGeo: vertices,
         capturedBounds: bounds,
         capturedCenter: { lat: centerLat, lng: centerLng },
-        sourceCanvasSize: sourceCanvasSize,
-        outputCanvasSize: canvasSize,
-        scaleFactor: scaleFactor
+        scaledSize: { width: scaledWidth, height: scaledHeight },
+        outputCanvasSize: { width: canvasWidth, height: canvasHeight },
+        scaleFactors: { x: scaleFactorX, y: scaleFactorY }
     });
 
     const pixelVertices = vertices.map((v, i) => {
@@ -1140,9 +1158,8 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
 
         // Log transformation for first vertex as example
         if (i === 0) {
-            const baseSize = sourceCanvasSize || canvasSize;
-            const xRaw = ((v[0] - centerLng) / lngRange) * baseSize;
-            const yRaw = ((centerLat - v[1]) / latRange) * baseSize;
+            const xRaw = ((v[0] - centerLng) / lngRange) * baseWidth;
+            const yRaw = ((centerLat - v[1]) / latRange) * baseHeight;
             console.log(`📊 Step G: Vertex 0 transformation breakdown`, {
                 geoCoords: { lng: v[0], lat: v[1] },
                 step1_normalize: {
@@ -1151,8 +1168,8 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
                     lngNormalized: (v[0] - centerLng) / lngRange,
                     latNormalized: (centerLat - v[1]) / latRange
                 },
-                step2_toBaseSize: { xRaw, yRaw, baseSize },
-                step3_afterScale: { x: xRaw * scaleFactor, y: yRaw * scaleFactor },
+                step2_toBaseSize: { xRaw, yRaw, baseWidth, baseHeight },
+                step3_afterScale: { x: xRaw * scaleFactorX, y: yRaw * scaleFactorY },
                 step4_afterTranslate: result
             });
         }
@@ -1220,16 +1237,16 @@ function drawTriangleOnCanvas(ctx, canvasSize, rotationAngle = 0, sourceCanvasSi
     console.log('   E-W Edge Length (expected):', (currentTileData.trianglePixels || '?'), 'px');
     console.log('   Difference:', (ewEdgePixelLength - (currentTileData.trianglePixels || 0)).toFixed(2), 'px');
     console.log('');
-    console.log('✅ Vertices Inside Canvas Check (0 to ' + canvasSize + 'px):');
+    console.log('✅ Vertices Inside Canvas Check (W: 0-' + canvasWidth + 'px, H: 0-' + canvasHeight + 'px):');
     console.log('   Vertex 0:',
-        (pixelVertices[0].x >= 0 && pixelVertices[0].x <= canvasSize &&
-         pixelVertices[0].y >= 0 && pixelVertices[0].y <= canvasSize) ? '✅ INSIDE' : '❌ OUTSIDE');
+        (pixelVertices[0].x >= 0 && pixelVertices[0].x <= canvasWidth &&
+         pixelVertices[0].y >= 0 && pixelVertices[0].y <= canvasHeight) ? '✅ INSIDE' : '❌ OUTSIDE');
     console.log('   Vertex 1:',
-        (pixelVertices[1].x >= 0 && pixelVertices[1].x <= canvasSize &&
-         pixelVertices[1].y >= 0 && pixelVertices[1].y <= canvasSize) ? '✅ INSIDE' : '❌ OUTSIDE');
+        (pixelVertices[1].x >= 0 && pixelVertices[1].x <= canvasWidth &&
+         pixelVertices[1].y >= 0 && pixelVertices[1].y <= canvasHeight) ? '✅ INSIDE' : '❌ OUTSIDE');
     console.log('   Vertex 2:',
-        (pixelVertices[2].x >= 0 && pixelVertices[2].x <= canvasSize &&
-         pixelVertices[2].y >= 0 && pixelVertices[2].y <= canvasSize) ? '✅ INSIDE' : '❌ OUTSIDE');
+        (pixelVertices[2].x >= 0 && pixelVertices[2].x <= canvasWidth &&
+         pixelVertices[2].y >= 0 && pixelVertices[2].y <= canvasHeight) ? '✅ INSIDE' : '❌ OUTSIDE');
     console.log('═══════════════════════════════════════════════════════');
 
     // Helper function to draw a triangle path
