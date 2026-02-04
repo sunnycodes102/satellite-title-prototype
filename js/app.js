@@ -300,7 +300,7 @@ function drawTriangle(coordinates) {
     console.log("========triangleLayer==========", triangleLayer.getBounds())
 
     // Add vertex coordinate labels for manual verification
-    addVertexLabels(coordinates);
+    // addVertexLabels(coordinates);
 
     // Fit map to triangle bounds
     map.fitBounds(triangleLayer.getBounds(), { padding: [10, 10] });
@@ -1272,12 +1272,12 @@ function drawTriangleOnCanvas(ctx, canvasWidth, canvasHeight, rotationAngle = 0,
     // Draw sub-tiles first (behind main tile)
     if (currentSubTiles && currentSubTiles.length > 0) {
         currentSubTiles.forEach(subTile => {
-            drawTrianglePath(subTile.coordinates, '#ffaa00', 2, [8, 4]);  // Orange, dashed
+            drawTrianglePath(subTile.coordinates, '#000000ff', 2, [8, 4]);  // Orange, dashed
         });
     }
 
     // Draw main triangle on top
-    drawTrianglePath(currentTileData.coordinates, '#00d4aa', 4);  // Teal, solid
+    drawTrianglePath(currentTileData.coordinates, '#000000ff', 4);  // Teal, solid
 }
 
 // ============================================
