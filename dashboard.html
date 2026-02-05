@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Session Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { margin-bottom: 20px; color: #333; }
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #0056b3; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #666;
+            margin-top: 5px;
+        }
+        .session {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .session-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+        .status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-uploading { background: #cfe2ff; color: #084298; }
+        .status-completed { background: #d1e7dd; color: #0f5132; }
+        .status-failed { background: #f8d7da; color: #842029; }
+        .progress-container {
+            margin: 15px 0;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e9ecef;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #007bff, #0056b3);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .session-meta {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .session-actions button {
+            margin-right: 10px;
+            padding: 8px 16px;
+            font-size: 13px;
+        }
+        .delete-btn {
+            background: #dc3545;
+        }
+        .delete-btn:hover {
+            background: #bb2d3b;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .error-state {
+            background: #f8d7da;
+            color: #842029;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📊 Session Dashboard</h1>
+
+    <div class="controls">
+        <button onclick="loadSessions()">🔄 Refresh</button>
+        <span style="margin-left: 15px; color: #666;">Auto-refresh: <strong id="auto-refresh-status">ON</strong></span>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div id="sessions"></div>
+
+    <script>
+        const API_URL = 'http://localhost:3001/api';
+        let autoRefresh = true;
+
+        async function loadSessions() {
+            try {
+                // Get sessions
+                const sessionsRes = await fetch(`${API_URL}/sessions`);
+                const sessions = await sessionsRes.json();
+
+                // Get stats
+                const healthRes = await fetch('http://localhost:3001/health');
+                const health = await healthRes.json();
+
+                // Render stats
+                renderStats(health);
+
+                // Render sessions
+                renderSessions(sessions);
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+                document.getElementById('sessions').innerHTML = `
+                    <div class="error-state">
+                        ❌ Could not connect to server. Make sure it's running on http://localhost:3001
+                        <br><br>
+                        <strong>Start the server:</strong>
+                        <pre style="background: white; padding: 10px; margin-top: 10px; border-radius: 4px;">cd server
+npm install
+npm run dev</pre>
+                    </div>
+                `;
+            }
+        }
+
+        function renderStats(health) {
+            const statsEl = document.getElementById('stats');
+            statsEl.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${health.totalSessions || 0}</div>
+                    <div class="stat-label">Total Sessions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${health.activeSessions || 0}</div>
+                    <div class="stat-label">Active Sessions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${health.totalCachedTiles || 0}</div>
+                    <div class="stat-label">Cached Tiles</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${health.storage || 'unknown'}</div>
+                    <div class="stat-label">Storage Type</div>
+                </div>
+            `;
+        }
+
+        function renderSessions(sessions) {
+            const container = document.getElementById('sessions');
+
+            if (sessions.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h2>No sessions yet</h2>
+                        <p>Create a session from the main app to see it here</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = sessions.map(session => {
+                const progress = (session.uploadedTiles / session.totalTiles * 100).toFixed(1);
+
+                return `
+                    <div class="session">
+                        <div class="session-header">
+                            <div class="session-title">${session.sectorCode}</div>
+                            <span class="status status-${session.status}">${session.status}</span>
+                        </div>
+
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${progress}%">
+                                    ${progress}%
+                                </div>
+                            </div>
+                            <div style="margin-top: 5px; color: #666; font-size: 14px;">
+                                ${session.uploadedTiles} / ${session.totalTiles} tiles
+                            </div>
+                        </div>
+
+                        <div class="session-meta">
+                            <div><strong>Session ID:</strong> ${session.id}</div>
+                            <div><strong>Created:</strong> ${new Date(session.createdAt).toLocaleString()}</div>
+                        </div>
+
+                        <div class="session-actions">
+                            <button onclick="viewSession('${session.id}')">👁️ View Details</button>
+                            <button class="delete-btn" onclick="deleteSession('${session.id}')">🗑️ Delete</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function viewSession(sessionId) {
+            const response = await fetch(`${API_URL}/sessions/${sessionId}`);
+            const session = await response.json();
+            alert(JSON.stringify(session, null, 2));
+        }
+
+        async function deleteSession(sessionId) {
+            if (!confirm('Delete this session and all its files?')) return;
+
+            try {
+                const response = await fetch(`${API_URL}/sessions/${sessionId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    console.log('✅ Session deleted');
+                    loadSessions();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error deleting session: ' + error.message);
+            }
+        }
+
+        // Auto-refresh every 2 seconds
+        setInterval(() => {
+            if (autoRefresh) {
+                loadSessions();
+            }
+        }, 2000);
+
+        // Initial load
+        loadSessions();
+    </script>
+</body>
+</html>

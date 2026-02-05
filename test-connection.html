@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Server Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px 5px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover { background: #0056b3; }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Server Connection Test</h1>
+    <p>Test your connection to the satellite tile server</p>
+
+    <div>
+        <button onclick="testHealth()">1. Test Server Health</button>
+        <button onclick="testCreateSession()">2. Create Test Session</button>
+        <button onclick="testGetSessions()">3. Get All Sessions</button>
+    </div>
+
+    <div id="result"></div>
+
+    <script>
+        const API_URL = 'http://localhost:3001/api';
+
+        function showResult(message, type = 'info') {
+            const result = document.getElementById('result');
+            result.className = type;
+            result.textContent = message;
+        }
+
+        async function testHealth() {
+            try {
+                showResult('⏳ Connecting to server...', 'info');
+
+                const response = await fetch('http://localhost:3001/health');
+                const data = await response.json();
+
+                showResult(
+                    '✅ Server is running!\n\n' +
+                    JSON.stringify(data, null, 2),
+                    'success'
+                );
+            } catch (error) {
+                showResult(
+                    '❌ Connection failed!\n\n' +
+                    error.message + '\n\n' +
+                    'Make sure the server is running:\n' +
+                    '1. cd server\n' +
+                    '2. npm install\n' +
+                    '3. npm run dev',
+                    'error'
+                );
+            }
+        }
+
+        async function testCreateSession() {
+            try {
+                showResult('⏳ Creating test session...', 'info');
+
+                const response = await fetch(`${API_URL}/sessions/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sectorCode: 'M713' })
+                });
+
+                const data = await response.json();
+
+                showResult(
+                    '✅ Session created!\n\n' +
+                    JSON.stringify(data, null, 2),
+                    'success'
+                );
+            } catch (error) {
+                showResult(
+                    '❌ Failed to create session!\n\n' +
+                    error.message,
+                    'error'
+                );
+            }
+        }
+
+        async function testGetSessions() {
+            try {
+                showResult('⏳ Getting all sessions...', 'info');
+
+                const response = await fetch(`${API_URL}/sessions`);
+                const data = await response.json();
+
+                showResult(
+                    `✅ Found ${data.length} session(s)\n\n` +
+                    JSON.stringify(data, null, 2),
+                    'success'
+                );
+            } catch (error) {
+                showResult(
+                    '❌ Failed to get sessions!\n\n' +
+                    error.message,
+                    'error'
+                );
+            }
+        }
+
+        // Auto-test on load
+        window.addEventListener('load', () => {
+            showResult('Click a button to test the server connection', 'info');
+        });
+    </script>
+</body>
+</html>
