@@ -150,7 +150,39 @@ function makeCRCTable() {
     return table;
 }
 
-// Make function globally available
+/**
+ * Convert canvas to Blob with DPI metadata (for batch processing)
+ * @param {HTMLCanvasElement} canvas - The canvas element
+ * @param {number} dpi - DPI value (default: 300)
+ * @param {function} callback - Callback function that receives the blob
+ */
+function canvasToBlobWithDPI(canvas, dpi = 300, callback) {
+    // Convert DPI to pixels per meter
+    const pixelsPerMeter = Math.round(dpi * 39.3701);
+
+    // Get canvas data as blob
+    canvas.toBlob(function(blob) {
+        // Read blob as array buffer
+        const reader = new FileReader();
+        reader.onload = function() {
+            const arrayBuffer = this.result;
+            const dataArray = new Uint8Array(arrayBuffer);
+
+            // Add pHYs chunk
+            const modifiedArray = addPhysChunk(dataArray, pixelsPerMeter);
+
+            // Create blob with DPI metadata
+            const modifiedBlob = new Blob([modifiedArray], { type: 'image/png' });
+
+            // Return blob via callback
+            callback(modifiedBlob);
+        };
+        reader.readAsArrayBuffer(blob);
+    }, 'image/png');
+}
+
+// Make functions globally available
 window.downloadCanvasWithDPI = downloadCanvasWithDPI;
+window.canvasToBlobWithDPI = canvasToBlobWithDPI;
 
 console.log('✓ Alternative DPI embedding method loaded');
