@@ -96,6 +96,132 @@ function calculateRotation(ewEdge, isInverted) {
 }
 
 // ============================================
+// SERVER API INTEGRATION
+// ============================================
+
+const API_URL = 'http://localhost:3001/api';
+let currentSessionId = null;
+
+/**
+ * Smart waiting function: Wait for canvas to be ready using event-driven approach
+ * with timeout fallback (better than static delays)
+ * Based on: https://davidwalsh.name/waitfor
+ */
+function waitForCanvasReady(maxWait = 5000) {
+    return new Promise((resolve) => {
+        const startTime = Date.now();
+        const canvas = document.getElementById('preview-canvas');
+
+        // Check if canvas has content (not blank)
+        function isCanvasReady() {
+            if (!canvas) return false;
+
+            try {
+                const ctx = canvas.getContext('2d');
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                // Check if canvas has any non-white pixels (has content)
+                for (let i = 0; i < imageData.data.length; i += 4) {
+                    if (imageData.data[i] !== 255 ||
+                        imageData.data[i + 1] !== 255 ||
+                        imageData.data[i + 2] !== 255) {
+                        return true; // Found non-white pixel
+                    }
+                }
+                return false;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Use requestAnimationFrame for checking (syncs with browser rendering)
+        // Based on: https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame
+        function checkReady() {
+            const elapsed = Date.now() - startTime;
+
+            // Timeout fallback
+            if (elapsed >= maxWait) {
+                console.warn(`Canvas ready check timed out after ${maxWait}ms`);
+                resolve();
+                return;
+            }
+
+            // Check if canvas is ready
+            if (isCanvasReady()) {
+                // Wait one more frame to ensure complete rendering
+                requestAnimationFrame(() => {
+                    resolve();
+                });
+            } else {
+                // Check again on next frame
+                requestAnimationFrame(checkReady);
+            }
+        }
+
+        // Start checking
+        requestAnimationFrame(checkReady);
+    });
+}
+
+/**
+ * Create a new upload session on the server
+ */
+async function createSession(sectorCode) {
+    try {
+        const response = await fetch(`${API_URL}/sessions/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sectorCode })
+        });
+
+        const data = await response.json();
+        currentSessionId = data.id;
+        console.log('📝 Session created:', currentSessionId);
+        return data;
+    } catch (error) {
+        console.error('❌ Failed to create session:', error);
+        throw new Error('Could not connect to server. Make sure it\'s running on http://localhost:3001');
+    }
+}
+
+/**
+ * Check if a tile already exists on the server (for deduplication)
+ */
+async function checkTileExists(tileCode) {
+    try {
+        const response = await fetch(`${API_URL}/tile-exists/${tileCode}?sessionId=${currentSessionId}`);
+        const data = await response.json();
+        return data.exists;
+    } catch (error) {
+        console.error('❌ Error checking tile:', error);
+        return false;
+    }
+}
+
+/**
+ * Upload a tile image to the server
+ */
+async function uploadTileToServer(tileCode, imageBlob) {
+    const formData = new FormData();
+    formData.append('image', imageBlob, `${tileCode}.png`);
+    formData.append('sessionId', currentSessionId);
+    formData.append('tileCode', tileCode);
+
+    try {
+        const response = await fetch(`${API_URL}/upload-tile`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+        return result;
+    } catch (error) {
+        console.error('❌ Upload failed:', error);
+        throw error;
+    }
+}
+
+// ============================================
 // CONFIGURATION
 // ============================================
 
@@ -791,7 +917,7 @@ async function generateImage() {
     btn.textContent = 'Generating...';
 
     setStatus('Processing satellite imagery...', 'info');
-
+    console.log("======currentTileData=====", currentTileData);
     try {
         // Step 1: Initialize hidden capture map if not already done
         initCaptureMap();
@@ -1404,4 +1530,345 @@ function setStatus(message, type) {
     const statusEl = document.getElementById('status-message');
     statusEl.textContent = message;
     statusEl.className = 'status ' + type;
+}
+
+// ============================================
+// BATCH PROCESSING
+// ============================================
+
+/**
+ * Global batch processing state
+ */
+let batchState = {
+    isRunning: false,
+    isCancelled: false,
+    startTime: 0,
+    completed: 0,
+    failed: 0,
+    total: 0,
+    currentTile: '',
+    failedTiles: []
+};
+
+/**
+ * Generate all tile codes for a sector (729 tiles)
+ */
+function generateAllTileCodes(sectorCode) {
+    const tiles = [];
+
+    // FOR TESTING: Generate only 9 tiles (M713111 - M713119)
+    // To generate all 729 tiles, uncomment the full loops below
+    for (let k = 1; k <= 9; k++) {
+        tiles.push(`${sectorCode}11${k}`);
+    }
+
+    /* FULL VERSION (729 tiles):
+    for (let i = 1; i <= 9; i++) {
+        for (let j = 1; j <= 9; j++) {
+            for (let k = 1; k <= 9; k++) {
+                tiles.push(`${sectorCode}${i}${j}${k}`);
+            }
+        }
+    }
+    */
+
+    console.log(`Generated ${tiles.length} tile codes for sector ${sectorCode}`);
+    return tiles;
+}
+
+/**
+ * Start batch generation process
+ */
+async function startBatchGeneration() {
+    const sectorCodeInput = document.getElementById('sector-code');
+    const sectorCode = sectorCodeInput.value.trim().toUpperCase();
+
+    // Validate sector code format
+    if (!/^[A-T][0-9]{3}$/.test(sectorCode)) {
+        alert('Invalid sector code format.\n\nRequired: Letter (A-T) + 3 digits\nExample: M713');
+        sectorCodeInput.focus();
+        return;
+    }
+
+    // Confirm with user
+    const confirmMessage = `[TEST MODE] Generate and upload 9 satellite tiles for sector ${sectorCode}?\n\n` +
+        `Tiles: ${sectorCode}1111 - ${sectorCode}1119 (9 tiles for testing)\n` +
+        `Tiles will be uploaded to server at: http://localhost:3001\n` +
+        `Estimated time: ~2-3 minutes\n` +
+        `Keep this browser tab open during generation\n\n` +
+        `Note: Make sure the server is running!\n\n` +
+        `Click OK to start batch processing.`;
+
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    // Generate tile codes first to get the count
+    const tileCodes = generateAllTileCodes(sectorCode);
+
+    // Initialize batch state
+    batchState = {
+        isRunning: true,
+        isCancelled: false,
+        startTime: Date.now(),
+        completed: 0,
+        failed: 0,
+        total: tileCodes.length,  // Dynamic based on actual tile count
+        currentTile: '',
+        failedTiles: []
+    };
+
+    // Update UI
+    document.getElementById('batch-generate-btn').disabled = true;
+    document.getElementById('batch-progress').classList.remove('hidden');
+    document.getElementById('progress-bar').style.width = '0%';
+
+    try {
+        await processBatchTiles(sectorCode, tileCodes);
+    } catch (error) {
+        console.error('Batch generation error:', error);
+        alert('Batch generation failed: ' + error.message);
+    } finally {
+        batchState.isRunning = false;
+        document.getElementById('batch-generate-btn').disabled = false;
+        document.getElementById('batch-progress').classList.add('hidden');
+    }
+}
+
+/**
+ * Process all tiles in batch and upload to server
+ */
+async function processBatchTiles(sectorCode, tileCodes) {
+    console.log(`Starting batch generation for ${tileCodes.length} tiles...`);
+
+    // Create session on server
+    try {
+        await createSession(sectorCode);
+    } catch (error) {
+        alert('Failed to connect to server:\n\n' + error.message + '\n\nMake sure the server is running:\ncd server\nnpm run dev');
+        throw error;
+    }
+
+    for (let i = 0; i < tileCodes.length; i++) {
+        if (batchState.isCancelled) {
+            console.log('Batch generation cancelled by user');
+            alert(`Batch cancelled. ${batchState.completed} tiles completed.`);
+            return;
+        }
+
+        const tileCode = tileCodes[i];
+        batchState.currentTile = tileCode;
+
+        try {
+            // Check if tile already exists on server
+            const exists = await checkTileExists(tileCode);
+            if (exists) {
+                console.log(`✅ [${i + 1}/${tileCodes.length}] ${tileCode} - cached (skipped)`);
+                batchState.completed++;
+                updateBatchProgress();
+                continue;
+            }
+
+            console.log(`🔄 [${i + 1}/${tileCodes.length}] Generating ${tileCode}...`);
+
+            // Generate tile image
+            const imageBlob = await generateSingleTileImage(tileCode);
+
+            // Upload to server
+            const result = await uploadTileToServer(tileCode, imageBlob);
+
+            if (result.success) {
+                console.log(`📤 [${i + 1}/${tileCodes.length}] ${tileCode} - uploaded (${result.progress.percentage}%)`);
+                batchState.completed++;
+            } else {
+                throw new Error(result.error || 'Upload failed');
+            }
+
+        } catch (error) {
+            console.error(`❌ Failed to process ${tileCode}:`, error);
+            batchState.failed++;
+            batchState.failedTiles.push({ code: tileCode, error: error.message });
+        }
+
+        updateBatchProgress();
+
+        // Delay after each tile to ensure map clears and prepares for next tile
+        // This prevents image quality issues from rapid successive generations
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (batchState.completed === 0) {
+        throw new Error('No tiles were uploaded successfully');
+    }
+
+    console.log(`✅ Upload complete! ${batchState.completed} tiles uploaded to server.`);
+    showBatchSummary(sectorCode);
+}
+
+/**
+ * Generate a single tile image and return as Blob with DPI metadata
+ * Uses the same logic as downloadImage to ensure consistency
+ */
+async function generateSingleTileImage(tileCode) {
+    document.getElementById('tile-code').value = tileCode;
+
+    const locations = tileLookup.nameToLocations(tileCode);
+    if (!locations || locations.length !== 3) {
+        throw new Error(`Invalid coordinates for tile ${tileCode}`);
+    }
+
+    // Convert to coordinate format [lng, lat] and close the triangle (same as single mode)
+    const coordinates = [
+        [locations[0][1], locations[0][0]],  // [lng, lat]
+        [locations[1][1], locations[1][0]],
+        [locations[2][1], locations[2][0]],
+        [locations[0][1], locations[0][0]]   // Close the triangle
+    ];
+
+    currentTileData = {
+        code: tileCode,
+        coordinates: coordinates
+    };
+
+    // Get sub-tile coordinates (same as drawTriangle does in single mode)
+    currentSubTiles = getSubTileCoordinates(tileCode);
+
+    updateDisplay();
+    await generateImage();
+
+    // IMPORTANT: Wait for canvas to be fully rendered before capturing (event-driven)
+    await waitForCanvasReady();
+
+    const canvas = document.getElementById('preview-canvas');
+    const dpi = OUTPUT_CONFIG.dpi;  // 300 DPI
+
+    // Use the same DPI embedding method as downloadImage
+    return new Promise((resolve, reject) => {
+        if (typeof canvasToBlobWithDPI !== 'undefined') {
+            // Use alternative method (more reliable) - same as downloadImage
+            canvasToBlobWithDPI(canvas, dpi, (blob) => {
+                if (blob) {
+                    resolve(blob);
+                } else {
+                    reject(new Error('Failed to create blob with DPI metadata'));
+                }
+            });
+        } else {
+            // Fallback: canvas.toBlob (no DPI metadata)
+            console.warn(`Tile ${tileCode}: DPI metadata function not available, using basic toBlob`);
+            canvas.toBlob(blob => {
+                if (blob) {
+                    resolve(blob);
+                } else {
+                    reject(new Error('Failed to create blob from canvas'));
+                }
+            }, 'image/png');
+        }
+    });
+}
+
+/**
+ * Generate ZIP file and trigger download
+ */
+async function generateAndDownloadZip(zip, sectorCode) {
+    setStatus('Creating ZIP file...', 'info');
+
+    const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+        streamFiles: true
+    }, (metadata) => {
+        const percent = metadata.percent.toFixed(1);
+        console.log(`ZIP progress: ${percent}%`);
+        setStatus(`Creating ZIP file... ${percent}%`, 'info');
+    });
+
+    console.log(`ZIP file created: ${(zipBlob.size / 1024 / 1024).toFixed(2)} MB`);
+
+    const downloadLink = document.createElement('a');
+    downloadLink.href = URL.createObjectURL(zipBlob);
+    downloadLink.download = `${sectorCode}_satellite_tiles.zip`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+
+    setTimeout(() => URL.revokeObjectURL(zipBlob), 1000);
+    setStatus('ZIP file downloaded!', 'info');
+}
+
+/**
+ * Update batch progress display
+ */
+function updateBatchProgress() {
+    const percentage = (batchState.completed / batchState.total * 100).toFixed(1);
+    const elapsed = (Date.now() - batchState.startTime) / 1000;
+    const avgTimePerTile = elapsed / batchState.completed;
+    const remaining = (batchState.total - batchState.completed) * avgTimePerTile;
+
+    document.getElementById('progress-text').textContent =
+        `${batchState.completed}/${batchState.total} tiles (${percentage}%)`;
+    document.getElementById('time-remaining').textContent =
+        `${formatTime(remaining)} remaining`;
+    document.getElementById('progress-bar').style.width = `${percentage}%`;
+}
+
+/**
+ * Format seconds to human-readable time
+ */
+function formatTime(seconds) {
+    if (seconds < 60) {
+        return `${Math.floor(seconds)}s`;
+    } else if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+}
+
+/**
+ * Cancel batch generation
+ */
+function cancelBatch() {
+    if (!batchState.isRunning) {
+        return;
+    }
+
+    if (confirm('Cancel batch generation?\n\nProgress will be lost.')) {
+        batchState.isCancelled = true;
+        setStatus('Cancelling batch generation...', 'error');
+    }
+}
+
+/**
+ * Show batch generation summary
+ */
+function showBatchSummary(sectorCode) {
+    const elapsed = (Date.now() - batchState.startTime) / 1000;
+    const avgTime = elapsed / batchState.completed;
+
+    let message = `Batch Generation Complete!\n\n`;
+    message += `Sector: ${sectorCode}\n`;
+    message += `Completed: ${batchState.completed} tiles\n`;
+    message += `Failed: ${batchState.failed} tiles\n`;
+    message += `Total time: ${formatTime(elapsed)}\n`;
+    message += `Average: ${avgTime.toFixed(1)}s per tile\n\n`;
+
+    if (batchState.failed > 0) {
+        message += `Failed tiles:\n`;
+        batchState.failedTiles.slice(0, 10).forEach(tile => {
+            message += `  - ${tile.code}\n`;
+        });
+        if (batchState.failedTiles.length > 10) {
+            message += `  ... and ${batchState.failedTiles.length - 10} more\n`;
+        }
+    }
+
+    message += `\nZIP file downloaded to your computer.`;
+    alert(message);
+    console.log('Batch Summary:', batchState);
 }
