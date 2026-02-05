@@ -50,6 +50,39 @@
                     Download PNG
                 </button>
 
+                <!-- Batch Processing Section -->
+                <div class="batch-section">
+                    <div class="batch-header">
+                        <h3>Batch Processing</h3>
+                        <span class="batch-subtitle">Generate 729 tiles for entire sector</span>
+                    </div>
+
+                    <div class="input-group">
+                        <div>
+                            <label for="sector-code">Sector Code:</label>
+                            <input type="text" id="sector-code" class="w-100" maxlength="4" pattern="[A-T][0-9]{3}" autocomplete="off" autocapitalize="characters">
+                        </div>
+                        <div>
+                            <button class="btn w-100" id="batch-generate-btn" onclick="startBatchGeneration()">
+                                <span class="btn-text">🧪 Generate 9 Tiles (Test Mode)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="batch-progress" class="batch-progress hidden">
+                        <div class="progress-info">
+                            <span id="progress-text">0/729 tiles (0%)</span>
+                            <span id="time-remaining">Calculating...</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="progress-bar" class="progress-bar"></div>
+                        </div>
+                        <div class="batch-actions">
+                            <button class="btn btn-small btn-danger" id="cancel-btn" onclick="cancelBatch()">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="coordinates-display" id="coords-display">
                     <div><span class="coord-label">Status:</span> <span class="coord-value">Ready</span></div>
                     <div><span class="coord-label">Tile:</span> <span class="coord-value" id="display-tile">M713289</span></div>
@@ -111,6 +144,7 @@
     <!-- External Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Application Scripts -->
     <script src="lib/TileLookup.js"></script>
