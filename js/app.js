@@ -1558,11 +1558,12 @@ function generateAllTileCodes(sectorCode) {
 
     // FOR TESTING: Generate only 9 tiles (M713111 - M713119)
     // To generate all 729 tiles, uncomment the full loops below
-    for (let k = 1; k <= 9; k++) {
-        tiles.push(`${sectorCode}11${k}`);
-    }
+    // for (let k = 1; k <= 9; k++) {
+    //     tiles.push(`${sectorCode}11${k}`);
+    // }
 
     /* FULL VERSION (729 tiles):
+    */
     for (let i = 1; i <= 9; i++) {
         for (let j = 1; j <= 9; j++) {
             for (let k = 1; k <= 9; k++) {
@@ -1570,7 +1571,6 @@ function generateAllTileCodes(sectorCode) {
             }
         }
     }
-    */
 
     console.log(`Generated ${tiles.length} tile codes for sector ${sectorCode}`);
     return tiles;
