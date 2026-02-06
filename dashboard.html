@@ -108,6 +108,12 @@
             padding: 8px 16px;
             font-size: 13px;
         }
+        .pdf-btn {
+            background: #28a745;
+        }
+        .pdf-btn:hover {
+            background: #218838;
+        }
         .delete-btn {
             background: #dc3545;
         }
@@ -133,6 +139,7 @@
 
     <div class="controls">
         <button onclick="loadSessions()">🔄 Refresh</button>
+        <button onclick="recoverSessions()" style="margin-left: 10px; background: #17a2b8;">🔧 Recover Sessions</button>
         <span style="margin-left: 15px; color: #666;">Auto-refresh: <strong id="auto-refresh-status">ON</strong></span>
     </div>
 
@@ -237,6 +244,8 @@ npm run dev</pre>
 
                         <div class="session-actions">
                             <button onclick="viewSession('${session.id}')">👁️ View Details</button>
+                            <button class="pdf-btn" onclick="downloadFile('${session.id}', '${session.sectorCode}', 'pdf')">📄 PDF (11 Columns)</button>
+                            <button class="pdf-btn" onclick="downloadFile('${session.id}', '${session.sectorCode}', 'eps')">📐 EPS (11 Columns)</button>
                             <button class="delete-btn" onclick="deleteSession('${session.id}')">🗑️ Delete</button>
                         </div>
                     </div>
@@ -248,6 +257,42 @@ npm run dev</pre>
             const response = await fetch(`${API_URL}/sessions/${sessionId}`);
             const session = await response.json();
             alert(JSON.stringify(session, null, 2));
+        }
+
+        async function downloadFile(sessionId, sectorCode, format = 'pdf') {
+            try {
+                const formatUpper = format.toUpperCase();
+                console.log(`📄 Requesting ${formatUpper} (11-column) for session: ${sessionId}`);
+
+                // Fetch file from server (11-column layout)
+                const response = await fetch(`${API_URL}/sessions/${sessionId}/${format}-11col`);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert(`Error generating ${formatUpper}: ` + error.error);
+                    return;
+                }
+
+                // Convert response to blob
+                const blob = await response.blob();
+
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sectorCode}_tiles_11col.${format}`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                // Clean up
+                setTimeout(() => window.URL.revokeObjectURL(url), 100);
+
+                console.log(`✅ ${formatUpper} (11-column) downloaded successfully`);
+            } catch (error) {
+                console.error(`❌ Error downloading ${format.toUpperCase()}:`, error);
+                alert(`Error downloading ${format.toUpperCase()}: ` + error.message);
+            }
         }
 
         async function deleteSession(sessionId) {
@@ -268,6 +313,36 @@ npm run dev</pre>
                 }
             } catch (error) {
                 alert('Error deleting session: ' + error.message);
+            }
+        }
+
+        async function recoverSessions() {
+            if (!confirm('Recover sessions from uploaded files?\n\nThis will scan the uploads directory and create sessions for any tiles found.')) {
+                return;
+            }
+
+            try {
+                console.log('🔧 Recovering sessions...');
+
+                const response = await fetch(`${API_URL}/sessions/recover`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    console.log('✅ Recovery complete:', result.sessions);
+                    alert(`Successfully recovered ${result.sessions.length} session(s)!`);
+                    loadSessions();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('❌ Error recovering sessions:', error);
+                alert('Error recovering sessions: ' + error.message);
             }
         }
 
