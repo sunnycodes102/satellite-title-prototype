@@ -156,6 +156,16 @@
         const SERVER_URL = `${window.location.protocol}//${window.location.host}`;
         const API_URL = `${SERVER_URL}/api`;
         let autoRefresh = true;
+        let downloadInProgress = false;
+
+        // Warn user before leaving if download is in progress
+        window.addEventListener('beforeunload', (e) => {
+            if (downloadInProgress) {
+                e.preventDefault();
+                e.returnValue = 'A download is in progress. Are you sure you want to leave?';
+                return e.returnValue;
+            }
+        });
 
         // Connect to Socket.io for real-time updates
         const socket = io(SERVER_URL);
@@ -355,6 +365,7 @@ npm run dev</pre>
         }
 
         async function downloadSectorFile(sectorCode, format = 'pdf') {
+            downloadInProgress = true;
             try {
                 const formatUpper = format.toUpperCase();
                 console.log(`📄 Requesting ${formatUpper} (11-column) for sector: ${sectorCode}`);
@@ -395,6 +406,7 @@ npm run dev</pre>
                 setTimeout(() => window.URL.revokeObjectURL(url), 100);
 
                 console.log(`✅ ${formatUpper} (11-column) downloaded successfully`);
+                downloadInProgress = false;
             } catch (error) {
                 console.error(`❌ Error downloading ${format.toUpperCase()}:`, error);
                 const statusDiv = document.getElementById('download-status');
@@ -402,6 +414,7 @@ npm run dev</pre>
                     <span style="color: #ff6b6b;">❌ ${format.toUpperCase()} download failed: ${error.message}</span>
                 </div>`;
                 setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+                downloadInProgress = false;
             }
         }
 
