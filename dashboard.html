@@ -144,6 +144,8 @@
 
     <div class="stats" id="stats"></div>
 
+    <div id="download-status" style="display: none;"></div>
+
     <div id="sectors"></div>
 
     <!-- Socket.io Client -->
@@ -181,7 +183,40 @@
         // Listen for stats updates
         socket.on('stats:update', (stats) => {
             console.log('📡 Stats updated');
-            renderStats(stats);
+        });
+
+        // Listen for download progress updates (EPS/PDF generation)
+        let currentDownload = null;
+        socket.on('download:progress', (progress) => {
+            console.log('📥 Download progress:', progress);
+            const statusDiv = document.getElementById('download-status');
+            if (!statusDiv) return;
+
+            const formatUpper = progress.type.toUpperCase();
+
+            if (progress.status === 'starting') {
+                statusDiv.style.display = 'block';
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ffa94d;">⏳ Starting ${formatUpper} generation for ${progress.sectorCode}...</span>
+                </div>`;
+            } else if (progress.status === 'processing') {
+                statusDiv.style.display = 'block';
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                    <div style="color: #ffa94d;">⏳ Generating ${formatUpper}... ${progress.percentage}%</div>
+                    <div style="font-size: 12px; margin-top: 5px; color: #888;">
+                        Page ${progress.currentPage || '?'}/${progress.totalPages || '?'} |
+                        Tiles: ${progress.processed}/${progress.total}
+                    </div>
+                    <div style="background: #444; height: 6px; border-radius: 3px; margin-top: 8px; overflow: hidden;">
+                        <div style="background: #00ff88; height: 100%; width: ${progress.percentage}%; transition: width 0.3s;"></div>
+                    </div>
+                </div>`;
+            } else if (progress.status === 'complete') {
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #00ff88;">✅ ${formatUpper} generation complete! Downloading...</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+            }
         });
 
         async function loadSectors() {
@@ -290,10 +325,6 @@ npm run dev</pre>
                             ${sector.status === 'incomplete'
                                 ? `<button onclick="viewMissing('${sector.sectorCode}')">🔍 View Missing (${sector.missingTiles.length})</button>`
                                 : ''}
-                            <button class="pdf-btn" onclick="downloadSectorFile('${sector.sectorCode}', 'pdf')"
-                                ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
-                                📄 PDF (11 Col)
-                            </button>
                             <button class="pdf-btn" onclick="downloadSectorFile('${sector.sectorCode}', 'eps')"
                                 ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
                                 📐 EPS (11 Col)
@@ -328,12 +359,22 @@ npm run dev</pre>
                 const formatUpper = format.toUpperCase();
                 console.log(`📄 Requesting ${formatUpper} (11-column) for sector: ${sectorCode}`);
 
+                // Show initial status
+                const statusDiv = document.getElementById('download-status');
+                statusDiv.style.display = 'block';
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ffa94d;">⏳ Requesting ${formatUpper} generation for ${sectorCode}...</span>
+                </div>`;
+
                 // Fetch file from server (sector-based endpoint)
                 const response = await fetch(`${API_URL}/sectors/${sectorCode}/${format}-11col`);
 
                 if (!response.ok) {
                     const error = await response.json();
-                    alert(`Error generating ${formatUpper}: ` + error.error);
+                    statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                        <span style="color: #ff6b6b;">❌ ${formatUpper} generation failed: ${error.error}</span>
+                    </div>`;
+                    setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
                     return;
                 }
 
@@ -356,7 +397,11 @@ npm run dev</pre>
                 console.log(`✅ ${formatUpper} (11-column) downloaded successfully`);
             } catch (error) {
                 console.error(`❌ Error downloading ${format.toUpperCase()}:`, error);
-                alert(`Error downloading ${format.toUpperCase()}: ` + error.message);
+                const statusDiv = document.getElementById('download-status');
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ff6b6b;">❌ ${format.toUpperCase()} download failed: ${error.message}</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
             }
         }
 

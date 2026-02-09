@@ -818,6 +818,12 @@ function generateAllTileCodesForSector(sectorCode) {
 
 // Generate PDF for sector - 11 column layout
 app.get('/api/sectors/:sectorCode/pdf-11col', async (req, res) => {
+    // PDF generation temporarily disabled
+    return res.status(503).json({
+        success: false,
+        error: 'PDF generation is temporarily disabled'
+    });
+
     try {
         const { sectorCode } = req.params;
         const sector = storage.getSector(sectorCode);
