@@ -28,7 +28,8 @@
 
                 <div class="input-group">
                     <label for="tile-code">Tile Code</label>
-                    <input type="text" id="tile-code" placeholder="M713289" value="M713289">
+                    <input type="text" id="tile-code" placeholder="M713289" value="M713289" maxlength="7">
+                    <div id="tile-code-error" style="color: #ff6b6b; font-size: 12px; margin-top: 4px; display: none;"></div>
                     <button class="btn btn-secondary" id="load-tile-btn" onclick="loadTileFromCode()" style="margin-top: 8px;">
                         Load Tile
                     </button>
@@ -61,11 +62,48 @@
                         <div>
                             <label for="sector-code">Sector Code:</label>
                             <input type="text" id="sector-code" class="w-100" maxlength="4" pattern="[A-T][0-9]{3}" autocomplete="off" autocapitalize="characters">
+                            <div id="sector-code-error" style="color: #ff6b6b; font-size: 12px; margin-top: 4px; display: none;"></div>
                         </div>
                         <div>
                             <button class="btn w-100" id="batch-generate-btn" onclick="startBatchGeneration()">
                                 <span class="btn-text">🧪 Generate 9 Tiles (Test Mode)</span>
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- Generation Mode Dialog -->
+                    <div id="mode-dialog" class="modal hidden">
+                        <div class="modal-content">
+                            <h2>Generate Tiles for Sector <span id="dialog-sector"></span></h2>
+
+                            <div class="sector-status">
+                                <p id="dialog-status">Loading sector status...</p>
+                            </div>
+
+                            <div class="mode-selection">
+                                <label class="mode-option">
+                                    <input type="radio" name="generation-mode" value="only-missing" checked>
+                                    <div class="mode-content">
+                                        <strong>Only Missing Tiles</strong>
+                                        <p id="mode-missing-desc">Generate missing tiles only</p>
+                                        <span class="mode-badge">Faster</span>
+                                    </div>
+                                </label>
+
+                                <label class="mode-option">
+                                    <input type="radio" name="generation-mode" value="replace-all">
+                                    <div class="mode-content">
+                                        <strong>Replace All Tiles</strong>
+                                        <p>Regenerate all 729 tiles (overwrite existing)</p>
+                                        <span class="mode-badge warning">Ensures Consistency</span>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div class="modal-actions">
+                                <button class="btn btn-primary" onclick="confirmGeneration()">Start Generation</button>
+                                <button class="btn btn-secondary" onclick="cancelDialog()">Cancel</button>
+                            </div>
                         </div>
                     </div>
 
@@ -79,6 +117,27 @@
                         </div>
                         <div class="batch-actions">
                             <button class="btn btn-small btn-danger" id="cancel-btn" onclick="cancelBatch()">Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- Download Section -->
+                    <div class="download-section" style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div class="batch-header">
+                            <h3>Download Files</h3>
+                            <span class="batch-subtitle">PDF and EPS files for complete sectors</span>
+                        </div>
+
+                        <div id="download-status" style="margin: 15px 0; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; font-size: 14px;">
+                            Enter a sector code above to check status
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
+                            <button class="btn btn-secondary" id="download-pdf-btn" onclick="downloadSectorPDF()" disabled title="Complete sector first">
+                                📄 Download PDF
+                            </button>
+                            <button class="btn btn-secondary" id="download-eps-btn" onclick="downloadSectorEPS()" disabled title="Complete sector first">
+                                📐 Download EPS
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -145,6 +204,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
     <!-- Application Scripts -->
     <script src="lib/TileLookup.js"></script>
@@ -152,5 +212,396 @@
     <script src="js/changeDPI-alternative.js"></script>
     <script src="js/verify-png-dpi.js"></script>
     <script src="js/app.js"></script>
+
+    <!-- Download Functions -->
+    <script>
+        // Dynamic URL for remote access
+        const SERVER_URL = `${window.location.protocol}//${window.location.host}`;
+        let currentSectorForDownload = null;
+
+        // Connect to Socket.io for real-time updates
+        const socket = io(SERVER_URL);
+
+        socket.on('connect', () => {
+            console.log('🔌 Connected to server for real-time updates');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('🔌 Disconnected from server');
+        });
+
+        // Listen for real-time sector updates
+        socket.on('sector:update', (sector) => {
+            // Auto-update download section if it's the current sector
+            if (currentSectorForDownload === sector.sectorCode) {
+                console.log('📡 Real-time update for sector:', sector.sectorCode);
+                updateDownloadSectionWithSector(sector);
+            }
+        });
+
+        // Listen for download progress updates
+        socket.on('download:progress', (progress) => {
+            if (currentSectorForDownload === progress.sectorCode) {
+                const statusDiv = document.getElementById('download-status');
+                const formatUpper = progress.type.toUpperCase();
+
+                if (progress.status === 'starting') {
+                    statusDiv.innerHTML = `<div style="color: #ffa94d;">⏳ Generating ${formatUpper} file... Starting</div>`;
+                } else if (progress.status === 'processing') {
+                    const progressBar = `<div style="background: #2a2a2a; height: 4px; border-radius: 2px; margin-top: 5px; overflow: hidden;">
+                        <div style="background: #00ff88; height: 100%; width: ${progress.percentage}%; transition: width 0.3s;"></div>
+                    </div>`;
+
+                    if (progress.type === 'eps') {
+                        statusDiv.innerHTML = `
+                            <div style="color: #ffa94d;">⏳ Generating ${formatUpper}... ${progress.percentage}%</div>
+                            <div style="font-size: 12px; margin-top: 3px; opacity: 0.8;">Processing: ${progress.processed}/${progress.total} tiles (Page ${progress.currentPage}/${progress.totalPages})</div>
+                            ${progressBar}
+                        `;
+                    } else {
+                        statusDiv.innerHTML = `
+                            <div style="color: #ffa94d;">⏳ Generating ${formatUpper}... ${progress.percentage}%</div>
+                            <div style="font-size: 12px; margin-top: 3px; opacity: 0.8;">Processing: ${progress.processed}/${progress.total} tiles</div>
+                            ${progressBar}
+                        `;
+                    }
+                } else if (progress.status === 'complete') {
+                    statusDiv.innerHTML = `
+                        <div style="color: #00ff88;">✅ ${formatUpper} generation complete!</div>
+                        <div style="font-size: 12px; margin-top: 3px; opacity: 0.8;">Processed ${progress.processed} tiles - Downloading...</div>
+                    `;
+                }
+            }
+        });
+
+        // ==================== VALIDATION FUNCTIONS ====================
+
+        /**
+         * Validate Sector Code format: [A-T][0-9]{3}
+         * @param {string} code - The sector code to validate
+         * @returns {object} { valid: boolean, error: string }
+         */
+        function validateSectorCode(code) {
+            if (!code || code.length === 0) {
+                return { valid: false, error: '' }; // Empty is okay, just not valid
+            }
+
+            // Must be exactly 4 characters
+            if (code.length !== 4) {
+                return { valid: false, error: 'Must be 4 characters (e.g., M713)' };
+            }
+
+            // First character must be A-T
+            const firstChar = code[0].toUpperCase();
+            if (firstChar < 'A' || firstChar > 'T') {
+                return { valid: false, error: 'First letter must be A-T' };
+            }
+
+            // Last 3 characters must be digits
+            const lastThree = code.substring(1);
+            if (!/^\d{3}$/.test(lastThree)) {
+                return { valid: false, error: 'Last 3 characters must be digits (0-9)' };
+            }
+
+            return { valid: true, error: '' };
+        }
+
+        /**
+         * Validate Tile Code format: [A-T][0-9]{3}[1-9]{3}
+         * @param {string} code - The tile code to validate
+         * @returns {object} { valid: boolean, error: string }
+         */
+        function validateTileCode(code) {
+            if (!code || code.length === 0) {
+                return { valid: false, error: '' }; // Empty is okay, just not valid
+            }
+
+            // Must be exactly 7 characters
+            if (code.length !== 7) {
+                return { valid: false, error: 'Must be 7 characters (e.g., M713289)' };
+            }
+
+            // First 4 characters: validate as sector code
+            const sectorPart = code.substring(0, 4);
+            const sectorValidation = validateSectorCode(sectorPart);
+            if (!sectorValidation.valid) {
+                return { valid: false, error: `Invalid sector: ${sectorValidation.error}` };
+            }
+
+            // Last 3 characters must be 1-9 (not 0)
+            const positionPart = code.substring(4);
+            if (!/^[1-9]{3}$/.test(positionPart)) {
+                return { valid: false, error: 'Position digits must be 1-9 (not 0)' };
+            }
+
+            return { valid: true, error: '' };
+        }
+
+        /**
+         * Show validation error for an input field
+         */
+        function showValidationError(inputId, errorId, message) {
+            const input = document.getElementById(inputId);
+            const errorDiv = document.getElementById(errorId);
+
+            input.style.borderColor = '#ff6b6b';
+            input.style.boxShadow = '0 0 0 2px rgba(255, 107, 107, 0.2)';
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        /**
+         * Clear validation error for an input field
+         */
+        function clearValidationError(inputId, errorId) {
+            const input = document.getElementById(inputId);
+            const errorDiv = document.getElementById(errorId);
+
+            input.style.borderColor = '';
+            input.style.boxShadow = '';
+            errorDiv.style.display = 'none';
+        }
+
+        /**
+         * Show validation success for an input field
+         */
+        function showValidationSuccess(inputId) {
+            const input = document.getElementById(inputId);
+            input.style.borderColor = '#00ff88';
+            input.style.boxShadow = '0 0 0 2px rgba(0, 255, 136, 0.2)';
+        }
+
+        // ==================== EVENT LISTENERS ====================
+
+        // Tile Code validation
+        document.getElementById('tile-code').addEventListener('input', function(e) {
+            const code = e.target.value.trim().toUpperCase();
+            e.target.value = code; // Auto-uppercase
+
+            if (code.length === 0) {
+                clearValidationError('tile-code', 'tile-code-error');
+                return;
+            }
+
+            const validation = validateTileCode(code);
+            if (validation.valid) {
+                clearValidationError('tile-code', 'tile-code-error');
+                showValidationSuccess('tile-code');
+            } else if (validation.error) {
+                showValidationError('tile-code', 'tile-code-error', validation.error);
+            }
+        });
+
+        // Sector Code validation
+        document.getElementById('sector-code').addEventListener('input', async function(e) {
+            const code = e.target.value.trim().toUpperCase();
+            e.target.value = code; // Auto-uppercase
+
+            if (code.length === 0) {
+                clearValidationError('sector-code', 'sector-code-error');
+                resetDownloadSection();
+                return;
+            }
+
+            const validation = validateSectorCode(code);
+            if (validation.valid) {
+                clearValidationError('sector-code', 'sector-code-error');
+                showValidationSuccess('sector-code');
+                // Check sector status for download
+                await checkSectorStatus(code);
+            } else if (validation.error) {
+                showValidationError('sector-code', 'sector-code-error', validation.error);
+                resetDownloadSection();
+            }
+        });
+
+        async function checkSectorStatus(sectorCode) {
+            const statusDiv = document.getElementById('download-status');
+            const pdfBtn = document.getElementById('download-pdf-btn');
+            const epsBtn = document.getElementById('download-eps-btn');
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}`);
+
+                if (!response.ok) {
+                    statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Sector ${sectorCode} not found</span>`;
+                    pdfBtn.disabled = true;
+                    epsBtn.disabled = true;
+                    currentSectorForDownload = null;
+                    return;
+                }
+
+                const sector = await response.json();
+                currentSectorForDownload = sectorCode;
+
+                const progress = ((sector.uploadedTiles / sector.totalTiles) * 100).toFixed(1);
+                const isComplete = sector.status === 'complete';
+
+                if (isComplete) {
+                    statusDiv.innerHTML = `
+                        <div style="color: #00ff88;">✅ Sector ${sectorCode}: Complete (${sector.uploadedTiles}/${sector.totalTiles} tiles)</div>
+                        <div style="font-size: 12px; margin-top: 5px; opacity: 0.8;">Ready to download PDF and EPS files</div>
+                    `;
+                    pdfBtn.disabled = false;
+                    epsBtn.disabled = false;
+                    pdfBtn.title = 'Download PDF file';
+                    epsBtn.title = 'Download EPS file';
+                } else {
+                    statusDiv.innerHTML = `
+                        <div style="color: #ffa94d;">⏳ Sector ${sectorCode}: Incomplete (${sector.uploadedTiles}/${sector.totalTiles} tiles - ${progress}%)</div>
+                        <div style="font-size: 12px; margin-top: 5px; opacity: 0.8;">Complete the sector to download files (${sector.missingTiles.length} tiles missing)</div>
+                    `;
+                    pdfBtn.disabled = true;
+                    epsBtn.disabled = true;
+                    pdfBtn.title = 'Complete sector first';
+                    epsBtn.title = 'Complete sector first';
+                }
+            } catch (error) {
+                console.error('Error checking sector status:', error);
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Error checking sector status</span>`;
+                pdfBtn.disabled = true;
+                epsBtn.disabled = true;
+                currentSectorForDownload = null;
+            }
+        }
+
+        function resetDownloadSection() {
+            document.getElementById('download-status').innerHTML = 'Enter a sector code above to check status';
+            document.getElementById('download-pdf-btn').disabled = true;
+            document.getElementById('download-eps-btn').disabled = true;
+            currentSectorForDownload = null;
+        }
+
+        // Update download section with sector data (for Socket.io updates)
+        function updateDownloadSectionWithSector(sector) {
+            if (!sector) return;
+
+            const statusDiv = document.getElementById('download-status');
+            const pdfBtn = document.getElementById('download-pdf-btn');
+            const epsBtn = document.getElementById('download-eps-btn');
+
+            const progress = ((sector.uploadedTiles / sector.totalTiles) * 100).toFixed(1);
+            const isComplete = sector.status === 'complete';
+
+            if (isComplete) {
+                statusDiv.innerHTML = `
+                    <div style="color: #00ff88;">✅ Sector ${sector.sectorCode}: Complete (${sector.uploadedTiles}/${sector.totalTiles} tiles)</div>
+                    <div style="font-size: 12px; margin-top: 5px; opacity: 0.8;">Ready to download PDF and EPS files</div>
+                `;
+                pdfBtn.disabled = false;
+                epsBtn.disabled = false;
+                pdfBtn.title = 'Download PDF file';
+                epsBtn.title = 'Download EPS file';
+            } else {
+                statusDiv.innerHTML = `
+                    <div style="color: #ffa94d;">⏳ Sector ${sector.sectorCode}: Incomplete (${sector.uploadedTiles}/${sector.totalTiles} tiles - ${progress}%)</div>
+                    <div style="font-size: 12px; margin-top: 5px; opacity: 0.8;">Complete the sector to download files (${sector.missingTiles.length} tiles missing)</div>
+                `;
+                pdfBtn.disabled = true;
+                epsBtn.disabled = true;
+                pdfBtn.title = 'Complete sector first';
+                epsBtn.title = 'Complete sector first';
+            }
+        }
+
+        async function downloadSectorPDF() {
+            if (!currentSectorForDownload) return;
+            await downloadSectorFile(currentSectorForDownload, 'pdf');
+        }
+
+        async function downloadSectorEPS() {
+            if (!currentSectorForDownload) return;
+            await downloadSectorFile(currentSectorForDownload, 'eps');
+        }
+
+        async function downloadSectorFile(sectorCode, format) {
+            try {
+                const formatUpper = format.toUpperCase();
+                const statusDiv = document.getElementById('download-status');
+
+                console.log(`📄 Requesting ${formatUpper} for sector: ${sectorCode}`);
+                statusDiv.innerHTML = `<div style="color: #ffa94d;">⏳ Generating ${formatUpper} file...</div>`;
+
+                // Fetch the file
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/${format}-11col`);
+
+                console.log(`📡 Response status: ${response.status}, Content-Type: ${response.headers.get('content-type')}`);
+
+                if (!response.ok) {
+                    let errorMsg = 'Unknown error';
+                    let errorData = null;
+                    try {
+                        errorData = await response.json();
+                        errorMsg = errorData.error || errorMsg;
+                    } catch (e) {
+                        errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+
+                    // Handle 409 Conflict (generation already in progress)
+                    if (response.status === 409 && errorData?.inProgress) {
+                        console.log(`⚠️ ${formatUpper} generation already in progress for ${sectorCode}`);
+                        statusDiv.innerHTML = `
+                            <div style="color: #ffa94d;">⏳ ${formatUpper} generation already in progress...</div>
+                            <div style="font-size: 12px; margin-top: 3px; opacity: 0.8;">Please wait for the current generation to complete, or refresh if you disconnected.</div>
+                        `;
+                        // Keep listening for progress events
+                        return;
+                    }
+
+                    console.error(`❌ Server error:`, errorMsg);
+                    statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Error: ${errorMsg}</span>`;
+                    setTimeout(() => checkSectorStatus(sectorCode), 3000);
+                    return;
+                }
+
+                // Convert to blob
+                console.log('📦 Converting response to blob...');
+                const blob = await response.blob();
+                console.log(`📦 Blob created: ${blob.size} bytes, type: ${blob.type}`);
+
+                // Validate blob
+                if (!blob || blob.size === 0) {
+                    throw new Error('Received empty file from server');
+                }
+
+                // Create download link
+                console.log('💾 Creating download link...');
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sectorCode}_tiles_11col.${format}`;
+                link.style.display = 'none';
+
+                // Append to body and trigger download
+                document.body.appendChild(link);
+                link.click();
+
+                console.log(`✅ Download triggered: ${link.download} (${blob.size} bytes)`);
+
+                // Show success message
+                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ ${formatUpper} download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</div>`;
+
+                // Cleanup after delay (give browser time to start download)
+                setTimeout(() => {
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(url);
+                    console.log('🧹 Cleanup completed');
+                }, 2000);
+
+                // Reset status after delay
+                setTimeout(() => checkSectorStatus(sectorCode), 4000);
+
+            } catch (error) {
+                console.error(`❌ Error downloading ${format.toUpperCase()}:`, error);
+                const statusDiv = document.getElementById('download-status');
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
+                setTimeout(() => {
+                    if (currentSectorForDownload) {
+                        checkSectorStatus(currentSectorForDownload);
+                    }
+                }, 3000);
+            }
+        }
+    </script>
 </body>
 </html>
