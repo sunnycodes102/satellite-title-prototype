@@ -99,8 +99,12 @@ function calculateRotation(ewEdge, isInverted) {
 // SERVER API INTEGRATION
 // ============================================
 
-const API_URL = 'http://localhost:3001/api';
-let currentSessionId = null;
+// Dynamic URL for remote access - uses current hostname
+const API_URL = `${window.location.protocol}//${window.location.host}/api`;
+let currentSessionId = null; // Legacy - for backward compatibility
+let currentJobId = null; // Current generation job ID
+let currentSectorCode = null; // Current sector being processed
+let generationMode = null; // 'only-missing' or 'replace-all'
 
 /**
  * Smart waiting function: Wait for canvas to be ready using event-driven approach
@@ -185,11 +189,12 @@ async function createSession(sectorCode) {
 }
 
 /**
- * Check if a tile already exists on the server (for deduplication)
+ * Check if a tile already exists on the server (sector-based)
  */
 async function checkTileExists(tileCode) {
     try {
-        const response = await fetch(`${API_URL}/tile-exists/${tileCode}?sessionId=${currentSessionId}`);
+        // Use new sector-based endpoint
+        const response = await fetch(`${API_URL}/tiles/${tileCode}/exists`);
         const data = await response.json();
         return data.exists;
     } catch (error) {
@@ -199,16 +204,20 @@ async function checkTileExists(tileCode) {
 }
 
 /**
- * Upload a tile image to the server
+ * Upload a tile image to the server (sector-based)
  */
 async function uploadTileToServer(tileCode, imageBlob) {
     const formData = new FormData();
     formData.append('image', imageBlob, `${tileCode}.png`);
-    formData.append('sessionId', currentSessionId);
     formData.append('tileCode', tileCode);
+    formData.append('sectorCode', currentSectorCode);
+    if (currentJobId) {
+        formData.append('jobId', currentJobId);
+    }
 
     try {
-        const response = await fetch(`${API_URL}/upload-tile`, {
+        // Use new sector-based endpoint
+        const response = await fetch(`${API_URL}/tiles/upload`, {
             method: 'POST',
             body: formData
         });
@@ -610,10 +619,11 @@ function loadTileFromCode() {
         return;
     }
 
-    // Validate format: 1 letter (A-T) + 1-6 digits (1-9)
-    const validPattern = /^[A-T][1-9]{1,6}$/;
+    // Validate format: [A-T][0-9]{3}[1-9]{3}
+    // Sector code (4 chars) + Position (3 digits, each 1-9)
+    const validPattern = /^[A-T][0-9]{3}[1-9]{3}$/;
     if (!validPattern.test(tileCode)) {
-        setStatus('Invalid tile code. Format: Letter (A-T) + 1-6 digits (1-9). Example: M713289', 'error');
+        setStatus('Invalid tile code. Format: [A-T][0-9]{3}[1-9]{3}. Example: M713289', 'error');
         return;
     }
 
@@ -1551,6 +1561,66 @@ let batchState = {
 };
 
 /**
+ * Show mode selection dialog
+ */
+async function showModeDialog(sectorCode) {
+    return new Promise(async (resolve) => {
+        try {
+            // Fetch sector status
+            const response = await fetch(`${API_URL}/sectors/${sectorCode}`);
+            const sector = await response.json();
+
+            // Update dialog content
+            document.getElementById('dialog-sector').textContent = sectorCode;
+
+            const statusText = sector.exists
+                ? `Current status: ${sector.uploadedTiles} / ${sector.totalTiles} tiles (${(sector.uploadedTiles/sector.totalTiles*100).toFixed(1)}%)`
+                : `Sector ${sectorCode} is new (0 tiles)`;
+
+            const missingCount = sector.exists ? sector.missingTiles.length : 729;
+            document.getElementById('dialog-status').textContent = statusText;
+            document.getElementById('mode-missing-desc').textContent =
+                `Generate ${missingCount} missing tiles (skip existing)`;
+
+            // Show dialog
+            document.getElementById('mode-dialog').classList.remove('hidden');
+
+            // Store resolve function
+            window.modeDialogResolve = resolve;
+        } catch (error) {
+            console.error('Error fetching sector status:', error);
+            alert('Error checking sector status: ' + error.message);
+            resolve(null);
+        }
+    });
+}
+
+/**
+ * Confirm generation (called from dialog)
+ */
+function confirmGeneration() {
+    const selectedMode = document.querySelector('input[name="generation-mode"]:checked').value;
+    document.getElementById('mode-dialog').classList.add('hidden');
+
+    if (window.modeDialogResolve) {
+        window.modeDialogResolve(selectedMode);
+        window.modeDialogResolve = null;
+    }
+}
+
+/**
+ * Cancel dialog
+ */
+function cancelDialog() {
+    document.getElementById('mode-dialog').classList.add('hidden');
+
+    if (window.modeDialogResolve) {
+        window.modeDialogResolve(null);
+        window.modeDialogResolve = null;
+    }
+}
+
+/**
  * Generate all tile codes for a sector (729 tiles)
  */
 function generateAllTileCodes(sectorCode) {
@@ -1577,7 +1647,7 @@ function generateAllTileCodes(sectorCode) {
 }
 
 /**
- * Start batch generation process
+ * Start batch generation process (sector-based)
  */
 async function startBatchGeneration() {
     const sectorCodeInput = document.getElementById('sector-code');
@@ -1590,64 +1660,86 @@ async function startBatchGeneration() {
         return;
     }
 
-    // Confirm with user
-    const confirmMessage = `[TEST MODE] Generate and upload 9 satellite tiles for sector ${sectorCode}?\n\n` +
-        `Tiles: ${sectorCode}1111 - ${sectorCode}1119 (9 tiles for testing)\n` +
-        `Tiles will be uploaded to server at: http://localhost:3001\n` +
-        `Estimated time: ~2-3 minutes\n` +
-        `Keep this browser tab open during generation\n\n` +
-        `Note: Make sure the server is running!\n\n` +
-        `Click OK to start batch processing.`;
-
-    if (!confirm(confirmMessage)) {
-        return;
+    // Show mode selection dialog
+    const selectedMode = await showModeDialog(sectorCode);
+    if (!selectedMode) {
+        return; // User cancelled
     }
 
-    // Generate tile codes first to get the count
-    const tileCodes = generateAllTileCodes(sectorCode);
+    // Store current sector and mode
+    currentSectorCode = sectorCode;
+    generationMode = selectedMode;
 
-    // Initialize batch state
-    batchState = {
-        isRunning: true,
-        isCancelled: false,
-        startTime: Date.now(),
-        completed: 0,
-        failed: 0,
-        total: tileCodes.length,  // Dynamic based on actual tile count
-        currentTile: '',
-        failedTiles: []
-    };
-
-    // Update UI
-    document.getElementById('batch-generate-btn').disabled = true;
-    document.getElementById('batch-progress').classList.remove('hidden');
-    document.getElementById('progress-bar').style.width = '0%';
+    console.log(`Starting generation for sector ${sectorCode} in mode: ${selectedMode}`);
 
     try {
-        await processBatchTiles(sectorCode, tileCodes);
+        // Start generation job on server
+        const response = await fetch(`${API_URL}/sectors/start-generation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sectorCode, mode: selectedMode })
+        });
+
+        if (!response.ok) {
+            throw new Error('Server returned error: ' + response.status);
+        }
+
+        const job = await response.json();
+        currentJobId = job.jobId;
+
+        console.log(`Job created: ${currentJobId}`);
+        console.log(`Tiles to generate: ${job.tilesToGenerate.length}`);
+
+        // Check if there are no tiles to generate
+        if (job.tilesToGenerate.length === 0) {
+            const mode = job.mode;
+            if (mode === 'only-missing') {
+                alert(`✅ Sector ${sectorCode} is already complete!\n\nAll 729 tiles have been generated.\n\nIf you want to regenerate tiles, use "Replace All Tiles" mode.`);
+            } else {
+                alert(`No tiles to generate for sector ${sectorCode}.`);
+            }
+            return;
+        }
+
+        // Initialize batch state
+        batchState = {
+            isRunning: true,
+            isCancelled: false,
+            startTime: Date.now(),
+            completed: 0,
+            failed: 0,
+            total: job.tilesToGenerate.length,
+            currentTile: '',
+            failedTiles: []
+        };
+
+        // Update UI
+        document.getElementById('batch-generate-btn').disabled = true;
+        document.getElementById('batch-progress').classList.remove('hidden');
+        document.getElementById('progress-bar').style.width = '0%';
+
+        // Process tiles
+        await processBatchTiles(sectorCode, job.tilesToGenerate);
+
     } catch (error) {
         console.error('Batch generation error:', error);
-        alert('Batch generation failed: ' + error.message);
+        alert('Batch generation failed:\n\n' + error.message + '\n\nMake sure the server is running:\ncd server\nnpm run dev');
     } finally {
         batchState.isRunning = false;
         document.getElementById('batch-generate-btn').disabled = false;
         document.getElementById('batch-progress').classList.add('hidden');
+        currentJobId = null;
+        currentSectorCode = null;
+        generationMode = null;
     }
 }
 
 /**
- * Process all tiles in batch and upload to server
+ * Process all tiles in batch and upload to server (sector-based)
  */
 async function processBatchTiles(sectorCode, tileCodes) {
     console.log(`Starting batch generation for ${tileCodes.length} tiles...`);
-
-    // Create session on server
-    try {
-        await createSession(sectorCode);
-    } catch (error) {
-        alert('Failed to connect to server:\n\n' + error.message + '\n\nMake sure the server is running:\ncd server\nnpm run dev');
-        throw error;
-    }
+    console.log(`Mode: ${generationMode}`);
 
     for (let i = 0; i < tileCodes.length; i++) {
         if (batchState.isCancelled) {
@@ -1660,25 +1752,31 @@ async function processBatchTiles(sectorCode, tileCodes) {
         batchState.currentTile = tileCode;
 
         try {
-            // Check if tile already exists on server
-            const exists = await checkTileExists(tileCode);
-            if (exists) {
-                console.log(`✅ [${i + 1}/${tileCodes.length}] ${tileCode} - cached (skipped)`);
-                batchState.completed++;
-                updateBatchProgress();
-                continue;
-            }
+            // In replace-all mode, skip the exists check and always generate
+            if (generationMode === 'replace-all') {
+                console.log(`🔄 [${i + 1}/${tileCodes.length}] Regenerating ${tileCode}...`);
+            } else {
+                // In only-missing mode, check if tile exists
+                const exists = await checkTileExists(tileCode);
+                if (exists) {
+                    console.log(`✅ [${i + 1}/${tileCodes.length}] ${tileCode} - exists (skipped)`);
+                    batchState.completed++;
+                    updateBatchProgress();
+                    continue;
+                }
 
-            console.log(`🔄 [${i + 1}/${tileCodes.length}] Generating ${tileCode}...`);
+                console.log(`🔄 [${i + 1}/${tileCodes.length}] Generating ${tileCode}...`);
+            }
 
             // Generate tile image
             const imageBlob = await generateSingleTileImage(tileCode);
 
-            // Upload to server
+            // Upload to server with sector and job info
             const result = await uploadTileToServer(tileCode, imageBlob);
 
             if (result.success) {
-                console.log(`📤 [${i + 1}/${tileCodes.length}] ${tileCode} - uploaded (${result.progress.percentage}%)`);
+                const progress = result.sectorProgress ? result.sectorProgress.percentage : '?';
+                console.log(`📤 [${i + 1}/${tileCodes.length}] ${tileCode} - uploaded (Sector: ${progress}%)`);
                 batchState.completed++;
             } else {
                 throw new Error(result.error || 'Upload failed');
