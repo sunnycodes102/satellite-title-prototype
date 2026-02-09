@@ -1,5 +1,7 @@
 // server.js - Complete server without Redis
 import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import cors from 'cors';
 import multer from 'multer';
 import crypto from 'crypto';
@@ -21,10 +23,49 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Create HTTP server and Socket.io
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+// Make io available to storage
+export { io };
+
+// Initialize Socket.io in storage for real-time updates
+storage.setIO(io);
+
+// Track ongoing PDF/EPS generations to prevent duplicates and handle disconnects
+const ongoingGenerations = new Map(); // Key: `${sectorCode}-${format}`, Value: { startedAt, clientId, aborted }
+
+// Handle client disconnections
+io.on('connection', (socket) => {
+    console.log(`🔌 Client connected: ${socket.id}`);
+
+    socket.on('disconnect', () => {
+        console.log(`🔌 Client disconnected: ${socket.id}`);
+
+        // Mark any ongoing generations for this client as aborted
+        for (const [key, generation] of ongoingGenerations.entries()) {
+            if (generation.clientId === socket.id) {
+                generation.aborted = true;
+                console.log(`⚠️ Marking generation ${key} as aborted (client disconnected)`);
+            }
+        }
+    });
+});
+
 // ==================== MIDDLEWARE ====================
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from parent directory (index.html, dashboard.html, js/, css/)
+const staticDir = path.join(__dirname, '..');
+app.use(express.static(staticDir));
 
 // Request logging
 app.use((req, res, next) => {
@@ -43,15 +84,41 @@ try {
 }
 
 const uploadStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        // Use flat uploads directory (files will be named uniquely)
-        cb(null, uploadsDir);
+    destination: async (req, file, cb) => {
+        // Extract sector code from filename (M713111.png → M713)
+        // This is more reliable than req.body.sectorCode which may not be parsed yet
+        const sectorCode = file.originalname.substring(0, 4);
+
+        if (sectorCode && /^[A-Z]\d{3}$/.test(sectorCode)) {
+            // New sector-based organization
+            const sectorDir = path.join(uploadsDir, sectorCode);
+            try {
+                await fs.mkdir(sectorDir, { recursive: true });
+                cb(null, sectorDir);
+            } catch (err) {
+                console.error(`Error creating sector directory ${sectorDir}:`, err);
+                cb(null, uploadsDir); // Fallback to flat structure
+            }
+        } else {
+            // Legacy: flat structure (for backward compatibility)
+            cb(null, uploadsDir);
+        }
     },
     filename: (req, file, cb) => {
-        // Generate unique filename with timestamp to avoid conflicts
-        const timestamp = Date.now();
-        const uniqueFilename = `${timestamp}_${file.originalname}`;
-        cb(null, uniqueFilename);
+        // Extract sector code from filename (M713111.png → M713)
+        const sectorCode = file.originalname.substring(0, 4);
+
+        if (sectorCode && /^[A-Z]\d{3}$/.test(sectorCode)) {
+            // New sector-based naming: just use tile code
+            // File will be: uploads/M713/M713111.png
+            cb(null, file.originalname);
+        } else {
+            // Legacy: timestamp-based naming
+            // File will be: uploads/1234567890_M713111.png
+            const timestamp = Date.now();
+            const uniqueFilename = `${timestamp}_${file.originalname}`;
+            cb(null, uniqueFilename);
+        }
     }
 });
 
@@ -136,7 +203,44 @@ app.post('/api/sessions/create', async (req, res) => {
     }
 });
 
-// Check if tile exists (deduplication)
+// Check if tile exists (new sector-based version)
+app.get('/api/tiles/:tileCode/exists', async (req, res) => {
+    try {
+        const { tileCode } = req.params;
+        const tile = storage.getTile(tileCode);
+
+        if (tile) {
+            // Verify file still exists on disk
+            const exists = await fileExists(tile.filePath);
+
+            if (exists) {
+                res.json({
+                    exists: true,
+                    tile: {
+                        tileCode: tile.tileCode,
+                        sectorCode: tile.sectorCode,
+                        filePath: tile.filePath,
+                        createdAt: tile.createdAt
+                    }
+                });
+            } else {
+                // File missing, remove from cache
+                storage.deleteTile(tileCode);
+                res.json({ exists: false });
+            }
+        } else {
+            res.json({ exists: false });
+        }
+    } catch (error) {
+        console.error('❌ Error checking tile:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Legacy endpoint for backward compatibility
 app.get('/api/tile-exists/:tileCode', async (req, res) => {
     try {
         const { tileCode } = req.params;
@@ -149,15 +253,15 @@ app.get('/api/tile-exists/:tileCode', async (req, res) => {
             const exists = await fileExists(tile.filePath);
 
             if (exists) {
-                // Add this session to the tile's usage tracking (if not already tracked)
-                if (sessionId && !tile.usedBySessions.includes(sessionId)) {
-                    tile.usedBySessions.push(sessionId);
-                    storage.setTile(tileCode, tile);
-                    storage.addTileToSession(sessionId, tileCode);
-
-                    // Increment session progress (cached tiles count as "uploaded")
-                    const session = storage.incrementSessionProgress(sessionId);
-                    console.log(`🔗 Session ${sessionId} using cached tile: ${tileCode} (${session.uploadedTiles}/${session.totalTiles})`);
+                // Legacy session support
+                if (sessionId) {
+                    const session = storage.getSession(sessionId);
+                    if (session && tile.usedBySessions && !tile.usedBySessions.includes(sessionId)) {
+                        tile.usedBySessions.push(sessionId);
+                        storage.setTile(tileCode, tile);
+                        storage.addTileToSession(sessionId, tileCode);
+                        storage.incrementSessionProgress(sessionId);
+                    }
                 }
 
                 res.json({
@@ -166,18 +270,11 @@ app.get('/api/tile-exists/:tileCode', async (req, res) => {
                     tile
                 });
             } else {
-                // File missing, remove from cache
                 storage.deleteTile(tileCode);
-                res.json({
-                    exists: false,
-                    cached: false
-                });
+                res.json({ exists: false, cached: false });
             }
         } else {
-            res.json({
-                exists: false,
-                cached: false
-            });
+            res.json({ exists: false, cached: false });
         }
     } catch (error) {
         console.error('❌ Error checking tile:', error);
@@ -188,7 +285,124 @@ app.get('/api/tile-exists/:tileCode', async (req, res) => {
     }
 });
 
-// Upload tile
+// Upload tile (new sector-based version)
+app.post('/api/tiles/upload', upload.single('image'), async (req, res) => {
+    try {
+        const { tileCode, sectorCode, jobId } = req.body;
+
+        if (!tileCode || !sectorCode || !req.file) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: tileCode, sectorCode, and image file required'
+            });
+        }
+
+        // Extract sector code from tile code for validation
+        const tileSectorCode = tileCode.substring(0, 4);
+        if (tileSectorCode !== sectorCode) {
+            return res.status(400).json({
+                success: false,
+                error: `Tile code ${tileCode} does not match sector ${sectorCode}`
+            });
+        }
+
+        // Calculate file hash
+        const fileBuffer = await fs.readFile(req.file.path);
+        const hash = calculateFileHash(fileBuffer);
+
+        // Check if tile already exists (for replace-all mode)
+        const existingTile = storage.getTile(tileCode);
+        if (existingTile && existingTile.filePath) {
+            try {
+                await fs.rm(existingTile.filePath, { force: true });
+                console.log(`🗑️ Replaced existing tile: ${tileCode}`);
+            } catch (err) {
+                console.warn(`⚠️ Could not delete old file: ${existingTile.filePath}`);
+            }
+        }
+
+        // Normalize file path to use forward slashes (for cross-platform consistency)
+        const normalizedPath = req.file.path.replace(/\\/g, '/');
+
+        // Store tile metadata (sector-based, no usedBySessions)
+        const tileData = {
+            tileCode,
+            sectorCode,
+            hash,
+            filePath: normalizedPath,
+            createdAt: new Date().toISOString(),
+            sizeBytes: fileBuffer.length
+        };
+
+        storage.setTile(tileCode, tileData);
+
+        // Get or create sector
+        let sector = storage.getSector(sectorCode);
+        if (!sector) {
+            sector = {
+                sectorCode,
+                totalTiles: 729,
+                uploadedTiles: 0,
+                missingTiles: generateAllTileCodesForSector(sectorCode),
+                tiles: [],
+                status: 'incomplete',
+                createdAt: new Date().toISOString(),
+                lastUpdatedAt: new Date().toISOString()
+            };
+            storage.createSector(sector);
+        }
+
+        // Add tile to sector
+        storage.addTileToSector(sectorCode, tileCode);
+        sector = storage.getSector(sectorCode); // Refresh
+
+        // Update sector missing tiles
+        const allTiles = generateAllTileCodesForSector(sectorCode);
+        sector.missingTiles = allTiles.filter(code => !sector.tiles.includes(code));
+        storage.updateSector(sectorCode, sector);
+
+        // Update job progress if jobId provided
+        let jobProgress = null;
+        if (jobId) {
+            const job = storage.getJob(jobId);
+            if (job) {
+                job.processedTiles++;
+                job.uploadedTiles++;
+                job.progress = job.processedTiles / job.totalTiles;
+                storage.updateJob(jobId, job);
+
+                jobProgress = {
+                    processed: job.processedTiles,
+                    total: job.totalTiles,
+                    percentage: (job.progress * 100).toFixed(1)
+                };
+            }
+        }
+
+        console.log(`📤 Uploaded: ${tileCode} (Sector: ${sector.uploadedTiles}/729)`);
+
+        res.json({
+            success: true,
+            tileCode,
+            sectorCode,
+            sectorProgress: {
+                uploaded: sector.uploadedTiles,
+                total: 729,
+                percentage: (sector.uploadedTiles / 729 * 100).toFixed(1),
+                status: sector.status
+            },
+            jobProgress
+        });
+    } catch (error) {
+        console.error('❌ Upload error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Upload tile (legacy session-based version for backward compatibility)
 app.post('/api/upload-tile', upload.single('image'), async (req, res) => {
     try {
         const { sessionId, tileCode, position } = req.body;
@@ -204,14 +418,17 @@ app.post('/api/upload-tile', upload.single('image'), async (req, res) => {
         const fileBuffer = await fs.readFile(req.file.path);
         const hash = calculateFileHash(fileBuffer);
 
+        // Normalize file path to use forward slashes (for cross-platform consistency)
+        const normalizedPath = req.file.path.replace(/\\/g, '/');
+
         // Store tile metadata
         const tileData = {
             tileCode,
             hash,
-            filePath: req.file.path,
+            filePath: normalizedPath,
             createdAt: new Date().toISOString(),
             sizeBytes: fileBuffer.length,
-            usedBySessions: [sessionId]
+            usedBySessions: sessionId ? [sessionId] : []
         };
 
         storage.setTile(tileCode, tileData);
@@ -220,17 +437,17 @@ app.post('/api/upload-tile', upload.single('image'), async (req, res) => {
         // Update session progress
         const session = storage.incrementSessionProgress(sessionId);
 
-        console.log(`📤 Uploaded: ${tileCode} (${session.uploadedTiles}/${session.totalTiles})`);
+        console.log(`📤 Uploaded (legacy): ${tileCode} (${session ? session.uploadedTiles : 0}/${session ? session.totalTiles : 0})`);
 
         res.json({
             success: true,
             tileCode,
             cached: false,
-            progress: {
+            progress: session ? {
                 uploaded: session.uploadedTiles,
                 total: session.totalTiles,
                 percentage: ((session.uploadedTiles / session.totalTiles) * 100).toFixed(1)
-            }
+            } : null
         });
     } catch (error) {
         console.error('❌ Upload error:', error);
@@ -343,6 +560,687 @@ app.delete('/api/sessions/:sessionId', async (req, res) => {
     }
 });
 
+// ==================== SECTOR ENDPOINTS ====================
+
+// Get all sectors
+app.get('/api/sectors', (req, res) => {
+    try {
+        const sectors = storage.getAllSectors();
+        res.json(sectors);
+    } catch (error) {
+        console.error('❌ Error getting sectors:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get specific sector details
+app.get('/api/sectors/:sectorCode', (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            // Sector doesn't exist yet - return empty state
+            return res.json({
+                sectorCode,
+                totalTiles: 729,
+                uploadedTiles: 0,
+                missingTiles: generateAllTileCodesForSector(sectorCode),
+                tiles: [],
+                status: 'incomplete',
+                exists: false
+            });
+        }
+
+        res.json({
+            ...sector,
+            exists: true
+        });
+    } catch (error) {
+        console.error('❌ Error getting sector:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get missing tiles for a sector
+app.get('/api/sectors/:sectorCode/missing', (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            // Sector doesn't exist - all tiles are missing
+            const allTiles = generateAllTileCodesForSector(sectorCode);
+            return res.json({
+                sectorCode,
+                missing: allTiles,
+                count: allTiles.length
+            });
+        }
+
+        res.json({
+            sectorCode,
+            missing: sector.missingTiles || [],
+            count: sector.missingTiles ? sector.missingTiles.length : 0
+        });
+    } catch (error) {
+        console.error('❌ Error getting missing tiles:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Delete sector and all its tiles
+app.delete('/api/sectors/:sectorCode', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            return res.status(404).json({
+                success: false,
+                error: 'Sector not found'
+            });
+        }
+
+        console.log(`🗑️ Deleting sector: ${sectorCode} (${sector.tiles.length} tiles)`);
+
+        // Delete all tile files for this sector
+        let deletedFiles = 0;
+        for (const tileCode of sector.tiles) {
+            const tile = storage.getTile(tileCode);
+            if (tile && tile.filePath) {
+                try {
+                    await fs.rm(tile.filePath, { force: true });
+                    storage.deleteTile(tileCode);
+                    deletedFiles++;
+                } catch (err) {
+                    console.warn(`⚠️ Could not delete file: ${tile.filePath}`);
+                }
+            }
+        }
+
+        // Delete sector from storage
+        storage.deleteSector(sectorCode);
+
+        console.log(`✅ Sector deleted: ${sectorCode} (${deletedFiles} files removed)`);
+
+        res.json({
+            success: true,
+            message: `Sector ${sectorCode} deleted successfully`,
+            tilesDeleted: deletedFiles
+        });
+    } catch (error) {
+        console.error('❌ Error deleting sector:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Start generation job for a sector
+app.post('/api/sectors/start-generation', (req, res) => {
+    try {
+        const { sectorCode, mode } = req.body;
+
+        if (!sectorCode) {
+            return res.status(400).json({
+                success: false,
+                error: 'sectorCode is required'
+            });
+        }
+
+        if (!mode || !['replace-all', 'only-missing'].includes(mode)) {
+            return res.status(400).json({
+                success: false,
+                error: 'mode must be "replace-all" or "only-missing"'
+            });
+        }
+
+        // Get or create sector
+        let sector = storage.getSector(sectorCode);
+        if (!sector) {
+            // Create new sector
+            sector = {
+                sectorCode,
+                totalTiles: 729,
+                uploadedTiles: 0,
+                missingTiles: generateAllTileCodesForSector(sectorCode),
+                tiles: [],
+                status: 'incomplete',
+                createdAt: new Date().toISOString(),
+                lastUpdatedAt: new Date().toISOString()
+            };
+            storage.createSector(sector);
+        } else {
+            // Recalculate missing tiles to ensure accuracy
+            sector = storage.recalculateMissingTiles(sectorCode);
+        }
+
+        // Determine which tiles to generate based on mode
+        let tilesToGenerate;
+        if (mode === 'replace-all') {
+            // Regenerate all 729 tiles
+            tilesToGenerate = generateAllTileCodesForSector(sectorCode);
+        } else {
+            // Only generate missing tiles
+            tilesToGenerate = sector.missingTiles || [];
+        }
+
+        // Create generation job
+        const jobId = `job_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        const job = {
+            jobId,
+            sectorCode,
+            mode,
+            totalTiles: tilesToGenerate.length,
+            processedTiles: 0,
+            uploadedTiles: 0,
+            skippedTiles: 0,
+            failedTiles: [],
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            completedAt: null,
+            progress: 0
+        };
+
+        storage.createJob(job);
+
+        console.log(`🚀 Started generation job: ${jobId}`);
+        console.log(`   Sector: ${sectorCode}`);
+        console.log(`   Mode: ${mode}`);
+        console.log(`   Tiles to generate: ${tilesToGenerate.length}`);
+
+        res.json({
+            success: true,
+            jobId,
+            sectorCode,
+            mode,
+            tilesToGenerate,
+            existingTiles: sector.uploadedTiles,
+            totalTiles: tilesToGenerate.length
+        });
+    } catch (error) {
+        console.error('❌ Error starting generation:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get generation job progress
+app.get('/api/jobs/:jobId', (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const job = storage.getJob(jobId);
+
+        if (!job) {
+            return res.status(404).json({
+                success: false,
+                error: 'Job not found'
+            });
+        }
+
+        res.json(job);
+    } catch (error) {
+        console.error('❌ Error getting job:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Helper function to generate all possible tile codes for a sector
+function generateAllTileCodesForSector(sectorCode) {
+    const tiles = [];
+    for (let i = 1; i <= 9; i++) {
+        for (let j = 1; j <= 9; j++) {
+            for (let k = 1; k <= 9; k++) {
+                tiles.push(`${sectorCode}${i}${j}${k}`);
+            }
+        }
+    }
+    return tiles;
+}
+
+// ==================== SECTOR-BASED PDF/EPS GENERATION ====================
+
+// Generate PDF for sector - 11 column layout
+app.get('/api/sectors/:sectorCode/pdf-11col', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            return res.status(404).json({
+                success: false,
+                error: 'Sector not found'
+            });
+        }
+
+        if (sector.status !== 'complete') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot generate PDF for incomplete sector (${sector.uploadedTiles}/729 tiles)`,
+                missing: sector.missingTiles.length
+            });
+        }
+
+        // Check if generation already in progress
+        const generationKey = `${sectorCode}-pdf`;
+        if (ongoingGenerations.has(generationKey)) {
+            return res.status(409).json({
+                success: false,
+                error: 'PDF generation already in progress for this sector',
+                inProgress: true
+            });
+        }
+
+        console.log(`📄 Generating PDF (11-column) for sector: ${sectorCode} (${sector.tiles.length} tiles)`);
+
+        // Track this generation
+        const clientId = req.headers['x-socket-id'] || 'unknown';
+        const generation = { startedAt: Date.now(), clientId, aborted: false };
+        ongoingGenerations.set(generationKey, generation);
+
+        const pageWidth = 3744;
+        const pageHeight = 2754;
+        const tilesPerRow = 11;
+        const tilesPerColumn = 9;
+        const tilesPerPage = 99;
+        const tileWidth = 340.36;
+        const tileHeight = 306;
+        const totalTiles = sector.tiles.length;
+        const totalPages = Math.ceil(totalTiles / tilesPerPage);
+
+        const tempFiles = [];
+        let processedTiles = 0;
+
+        // Clean up on response close/error
+        res.on('close', () => {
+            generation.aborted = true;
+            console.log(`⚠️ Response closed for ${generationKey}`);
+        });
+
+        // Emit initial progress
+        io.emit('download:progress', {
+            type: 'pdf',
+            sectorCode,
+            processed: 0,
+            total: totalTiles,
+            percentage: 0,
+            status: 'starting',
+            currentPage: 0,
+            totalPages
+        });
+
+        // Generate separate PDF for each page
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            if (generation.aborted || res.closed) {
+                console.log(`⚠️ Aborting PDF generation for ${sectorCode} (client disconnected)`);
+                // Clean up temp files
+                for (const f of tempFiles) {
+                    try { await fs.rm(f, { force: true }); } catch {}
+                }
+                ongoingGenerations.delete(generationKey);
+                return;
+            }
+
+            const pageFilePath = path.join(uploadsDir, `temp_${Date.now()}_page${pageNum}.pdf`);
+            tempFiles.push(pageFilePath);
+
+            const doc = new PDFDocument({
+                size: [pageWidth, pageHeight],
+                margin: 0,
+                pdfVersion: '1.7',
+                compress: false,
+                info: {
+                    Title: `${sectorCode} Page ${pageNum}/${totalPages}`,
+                    Author: 'Satellite Tile Generator',
+                    Subject: `Satellite tiles for sector ${sectorCode}`,
+                    Creator: 'PDFKit',
+                    Producer: 'Satellite Tile Generator'
+                }
+            });
+
+            const writeStream = createWriteStream(pageFilePath);
+            doc.pipe(writeStream);
+
+            const startIdx = (pageNum - 1) * tilesPerPage;
+            const endIdx = Math.min(startIdx + tilesPerPage, sector.tiles.length);
+            const pageTiles = sector.tiles.slice(startIdx, endIdx);
+
+            let tileCount = 0;
+            for (const tileCode of pageTiles) {
+                if (generation.aborted || res.closed) {
+                    doc.end();
+                    break;
+                }
+
+                const tile = storage.getTile(tileCode);
+                if (!tile || !tile.filePath) {
+                    console.log(`⚠️ Skipping ${tileCode}: No tile metadata or filePath`);
+                    continue;
+                }
+
+                const exists = await fileExists(tile.filePath);
+                if (!exists) {
+                    console.log(`⚠️ Skipping ${tileCode}: File not found at ${tile.filePath}`);
+                    continue;
+                }
+
+                // Column-by-column layout: fill vertically first (top to bottom), then move right
+                const col = Math.floor(tileCount / tilesPerColumn);  // Column index (0-10)
+                const row = tileCount % tilesPerColumn;              // Row index (0-8)
+
+                // Cell position (top-left corner of cell)
+                const cellX = col * tileWidth;
+                const cellY = row * tileHeight;
+
+                try {
+                    // Get image dimensions to calculate actual size at 300 DPI
+                    const metadata = await sharp(tile.filePath).metadata();
+                    // Calculate actual image dimensions in points (pixels / 300 DPI * 72 points/inch)
+                    const imgWidth = (metadata.width / 300) * 72;
+                    const imgHeight = (metadata.height / 300) * 72;
+
+                    // Place image at top-left corner of cell with original dimensions
+                    doc.image(tile.filePath, cellX, cellY, {
+                        width: imgWidth,
+                        height: imgHeight,
+                        compress: false
+                    });
+                    tileCount++;
+                    processedTiles++;
+
+                    // Emit progress every 10 tiles
+                    if (processedTiles % 10 === 0 || processedTiles === totalTiles) {
+                        const percentage = Math.round((processedTiles / totalTiles) * 100);
+                        io.emit('download:progress', {
+                            type: 'pdf',
+                            sectorCode,
+                            processed: processedTiles,
+                            total: totalTiles,
+                            percentage,
+                            status: 'processing',
+                            currentPage: pageNum,
+                            totalPages
+                        });
+                    }
+                } catch (err) {
+                    console.error(`❌ Error adding tile ${tileCode}:`, err);
+                }
+            }
+
+            doc.end();
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', resolve);
+                writeStream.on('error', reject);
+            });
+        }
+
+        // Create ZIP archive with all PDF pages
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles_11col_pdf.zip"`);
+        archive.pipe(res);
+
+        for (let i = 0; i < totalPages; i++) {
+            archive.file(tempFiles[i], { name: `${sectorCode}_page${i+1}_11col.pdf` });
+        }
+
+        await archive.finalize();
+
+        console.log(`✅ PDF generated: ${processedTiles} tiles across ${totalPages} pages`);
+
+        // Emit completion
+        io.emit('download:progress', {
+            type: 'pdf',
+            sectorCode,
+            processed: processedTiles,
+            total: totalTiles,
+            percentage: 100,
+            status: 'complete'
+        });
+
+        // Clean up temp files
+        for (const f of tempFiles) {
+            try { await fs.rm(f, { force: true }); } catch {}
+        }
+
+        // Clean up tracking
+        ongoingGenerations.delete(generationKey);
+    } catch (error) {
+        console.error('❌ Error generating PDF:', error);
+        ongoingGenerations.delete(generationKey);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Generate EPS for sector - 11 column layout
+app.get('/api/sectors/:sectorCode/eps-11col', async (req, res) => {
+    const tempFiles = [];
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            return res.status(404).json({ success: false, error: 'Sector not found' });
+        }
+
+        if (sector.status !== 'complete') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot generate EPS for incomplete sector (${sector.uploadedTiles}/729 tiles)`
+            });
+        }
+
+        // Check if generation already in progress
+        const generationKey = `${sectorCode}-eps`;
+        if (ongoingGenerations.has(generationKey)) {
+            return res.status(409).json({
+                success: false,
+                error: 'EPS generation already in progress for this sector',
+                inProgress: true
+            });
+        }
+
+        console.log(`📄 Generating EPS (11-column) for sector: ${sectorCode}`);
+
+        // Track this generation
+        const clientId = req.headers['x-socket-id'] || 'unknown';
+        const generation = { startedAt: Date.now(), clientId, aborted: false };
+        ongoingGenerations.set(generationKey, generation);
+
+        // Clean up on response close/error
+        res.on('close', () => {
+            generation.aborted = true;
+            console.log(`⚠️ Response closed for ${generationKey}`);
+        });
+
+        const pageWidth = 3744;
+        const pageHeight = 2754;
+        const tilesPerPage = 99;
+        const tileWidth = 340.36;
+        const tileHeight = 306;
+        const totalPages = Math.ceil(sector.tiles.length / tilesPerPage);
+        const totalTiles = sector.tiles.length;
+        let processedTiles = 0;
+
+        // Emit initial progress
+        io.emit('download:progress', {
+            type: 'eps',
+            sectorCode,
+            processed: 0,
+            total: totalTiles,
+            percentage: 0,
+            status: 'starting',
+            currentPage: 0,
+            totalPages
+        });
+
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            const pageFilePath = path.join(uploadsDir, `temp_${Date.now()}_page${pageNum}.eps`);
+            tempFiles.push(pageFilePath);
+            const writeStream = createWriteStream(pageFilePath, { encoding: 'utf8' });
+
+            const startIdx = (pageNum - 1) * tilesPerPage;
+            const endIdx = Math.min(startIdx + tilesPerPage, sector.tiles.length);
+            const pageTiles = sector.tiles.slice(startIdx, endIdx);
+
+            writeStream.write(`%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 ${Math.ceil(pageWidth)} ${Math.ceil(pageHeight)}
+%%Title: ${sectorCode} Page ${pageNum}/${totalPages}
+%%EndComments
+%%Page: 1 1
+
+`);
+
+            let tileCount = 0;
+            for (const tileCode of pageTiles) {
+                // Check if generation should be aborted
+                if (generation.aborted || res.closed) {
+                    console.log(`⚠️ Aborting EPS generation for ${sectorCode} (client disconnected)`);
+                    writeStream.end();
+                    ongoingGenerations.delete(generationKey);
+                    // Clean up temp files
+                    for (const f of tempFiles) {
+                        try { await fs.rm(f, { force: true }); } catch {}
+                    }
+                    return;
+                }
+
+                const tile = storage.getTile(tileCode);
+                if (!tile || !tile.filePath) continue;
+                if (!await fileExists(tile.filePath)) continue;
+
+                const positionOnPage = tileCount;
+                // Column-by-column layout: fill vertically first (top to bottom), then move right
+                const col = Math.floor(positionOnPage / 9);  // Column index (0-10)
+                const row = positionOnPage % 9;              // Row index (0-8)
+
+                // Cell position (top-left corner of cell)
+                const cellX = col * tileWidth;
+                const cellY = pageHeight - (row * tileHeight);
+
+                try {
+                    const metadata = await sharp(tile.filePath).metadata();
+                    // Remove alpha channel and convert to RGB (EPS expects RGB, not RGBA)
+                    const rawData = await sharp(tile.filePath)
+                        .removeAlpha()
+                        .raw()
+                        .toBuffer();
+
+                    // Calculate actual image dimensions in points (assuming 300 DPI)
+                    // Formula: pixels / 300 DPI * 72 points/inch
+                    const imgWidth = (metadata.width / 300) * 72;
+                    const imgHeight = (metadata.height / 300) * 72;
+
+                    // Position image at top-left corner of cell
+                    // In PostScript, origin is bottom-left, so we need to position from top
+                    const imgX = cellX;
+                    const imgY = cellY - imgHeight;
+
+                    writeStream.write(`
+gsave
+${imgX.toFixed(2)} ${imgY.toFixed(2)} translate
+${imgWidth.toFixed(2)} ${imgHeight.toFixed(2)} scale
+/DeviceRGB setcolorspace
+<< /ImageType 1 /Width ${metadata.width} /Height ${metadata.height}
+   /ImageMatrix [${metadata.width} 0 0 -${metadata.height} 0 ${metadata.height}]
+   /DataSource <`);
+
+                    const hexData = rawData.toString('hex').toUpperCase();
+                    for (let i = 0; i < hexData.length; i += 80) {
+                        writeStream.write(hexData.substring(i, Math.min(i + 80, hexData.length)) + '\n');
+                    }
+
+                    writeStream.write(`> /BitsPerComponent 8 /Decode [0 1 0 1 0 1]
+>> image
+grestore
+`);
+                    tileCount++;
+                    processedTiles++;
+
+                    // Emit progress every 10 tiles
+                    if (processedTiles % 10 === 0) {
+                        const percentage = Math.round((processedTiles / totalTiles) * 100);
+                        io.emit('download:progress', {
+                            type: 'eps',
+                            sectorCode,
+                            processed: processedTiles,
+                            total: totalTiles,
+                            percentage,
+                            status: 'processing',
+                            currentPage: pageNum,
+                            totalPages
+                        });
+                    }
+                } catch (err) {
+                    console.error(`❌ Error processing ${tileCode}:`, err);
+                }
+            }
+
+            writeStream.write('showpage\n%%EOF\n');
+            await new Promise((resolve, reject) => {
+                writeStream.end(() => resolve());
+                writeStream.on('error', reject);
+            });
+        }
+
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles_11col_eps.zip"`);
+        archive.pipe(res);
+
+        for (let i = 0; i < totalPages; i++) {
+            archive.file(tempFiles[i], { name: `${sectorCode}_page${i+1}_11col.eps` });
+        }
+
+        await archive.finalize();
+        console.log(`✅ EPS ZIP generated`);
+
+        // Emit completion
+        io.emit('download:progress', {
+            type: 'eps',
+            sectorCode,
+            processed: processedTiles,
+            total: totalTiles,
+            percentage: 100,
+            status: 'complete',
+            currentPage: totalPages,
+            totalPages
+        });
+
+        // Clean up tracking
+        ongoingGenerations.delete(generationKey);
+
+        setTimeout(async () => {
+            for (const f of tempFiles) {
+                try { await fs.rm(f, { force: true }); } catch {}
+            }
+        }, 5000);
+    } catch (error) {
+        console.error('❌ Error generating EPS:', error);
+        ongoingGenerations.delete(generationKey);
+        for (const f of tempFiles) {
+            try { await fs.rm(f, { force: true }); } catch {}
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Generate PDF from session tiles
 app.get('/api/sessions/:sessionId/pdf', async (req, res) => {
     try {
@@ -415,8 +1313,9 @@ app.get('/api/sessions/:sessionId/pdf', async (req, res) => {
 
             // Calculate position on current page
             const positionOnPage = tileCount % tilesPerPage;
-            const row = Math.floor(positionOnPage / tilesPerRow);
-            const col = positionOnPage % tilesPerRow;
+            // Column-by-column layout: fill vertically first (top to bottom), then move right
+            const col = Math.floor(positionOnPage / tilesPerColumn);
+            const row = positionOnPage % tilesPerColumn;
             const x = margin + (col * tileWidth);
             const y = margin + (row * tileHeight);
 
@@ -1020,15 +1919,32 @@ app.post('/api/sessions/recover', async (req, res) => {
     }
 });
 
+// ==================== SOCKET.IO ====================
+
+io.on('connection', (socket) => {
+    console.log('🔌 Client connected:', socket.id);
+
+    socket.on('disconnect', () => {
+        console.log('🔌 Client disconnected:', socket.id);
+    });
+
+    // Send initial data on connection
+    socket.emit('sectors:list', storage.getAllSectors());
+    socket.emit('stats:update', storage.getStats());
+});
+
 // ==================== START SERVER ====================
 
-app.listen(PORT, () => {
+// Listen on all interfaces (0.0.0.0) for remote access
+httpServer.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('========================================');
     console.log('🚀 Satellite Tile Server');
     console.log('========================================');
-    console.log(`📡 Server: http://localhost:${PORT}`);
-    console.log(`💾 Storage: In-Memory (no Redis)`);
+    console.log(`📡 Server: http://0.0.0.0:${PORT}`);
+    console.log(`📡 Remote: http://<your-vps-ip>:${PORT}`);
+    console.log(`🔌 WebSocket: Socket.io enabled`);
+    console.log(`💾 Storage: Persistent JSON`);
     console.log(`📁 Uploads: ${process.env.UPLOAD_DIR || './uploads'}`);
     console.log('========================================');
     console.log('');
