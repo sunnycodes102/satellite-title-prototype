@@ -573,25 +573,21 @@ npm run dev</pre>
             const statusDiv = document.getElementById('download-status');
             statusDiv.style.display = 'block';
             statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
-                <span style="color: #00ff88;">📥 Downloading cached EPS...</span>
+                <span style="color: #00ff88;">📥 Starting download...</span>
             </div>`;
 
             try {
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-cached`);
-                if (!response.ok) throw new Error('Download failed');
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - starts immediately
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/eps-cached`;
                 link.download = `${sectorCode}_eps.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                setTimeout(() => window.URL.revokeObjectURL(url), 100);
 
                 statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
-                    <span style="color: #00ff88;">✅ EPS downloaded! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                    <span style="color: #00ff88;">✅ Download started!</span>
                 </div>`;
                 setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
             } catch (error) {
@@ -610,28 +606,21 @@ npm run dev</pre>
             const statusDiv = document.getElementById('download-status');
             statusDiv.style.display = 'block';
             statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
-                <span style="color: #ffa94d;">⏳ Generating EPS (this may take a while)...</span>
+                <span style="color: #ffa94d;">⏳ Generating EPS (this may take 2-5 minutes)...</span>
             </div>`;
 
             try {
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-11col?rebuild=true`);
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Generation failed');
-                }
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - triggers generation and streams result
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/eps-11col?rebuild=true`;
                 link.download = `${sectorCode}_eps.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                setTimeout(() => window.URL.revokeObjectURL(url), 100);
 
                 statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
-                    <span style="color: #00ff88;">✅ EPS generated and downloaded! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                    <span style="color: #00ff88;">✅ Generation started! Watch progress in real-time above.</span>
                 </div>`;
                 setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
             } catch (error) {

@@ -665,27 +665,20 @@
             closeEpsDialog();
 
             const statusDiv = document.getElementById('download-status');
-            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Downloading cached EPS...</div>';
+            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Starting download...</div>';
 
             try {
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-cached`);
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - starts immediately without waiting for full file
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/eps-cached`;
                 link.download = `${sectorCode}_eps.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
 
-                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ EPS download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</div>`;
-                setTimeout(() => window.URL.revokeObjectURL(url), 2000);
-                setTimeout(() => checkSectorStatus(sectorCode), 4000);
+                statusDiv.innerHTML = '<div style="color: #00ff88;">✅ Download started!</div>';
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
             } catch (error) {
                 console.error('Error downloading cached EPS:', error);
                 statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
@@ -699,35 +692,21 @@
             closeEpsDialog();
 
             const statusDiv = document.getElementById('download-status');
-            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Generating EPS file (this may take a while)...</div>';
+            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Generating EPS file (this may take 2-5 minutes)...</div>';
 
             try {
-                // Force rebuild with ?rebuild=true
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-11col?rebuild=true`);
-
-                if (!response.ok) {
-                    let errorMsg = 'Unknown error';
-                    try {
-                        const errorData = await response.json();
-                        errorMsg = errorData.error || errorMsg;
-                    } catch (e) {
-                        errorMsg = `HTTP ${response.status}`;
-                    }
-                    throw new Error(errorMsg);
-                }
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - triggers generation and streams result
+                // Socket.io will show progress updates in real-time
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/eps-11col?rebuild=true`;
                 link.download = `${sectorCode}_eps.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
 
-                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ EPS generated and download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</div>`;
-                setTimeout(() => window.URL.revokeObjectURL(url), 2000);
-                setTimeout(() => checkSectorStatus(sectorCode), 4000);
+                statusDiv.innerHTML = '<div style="color: #00ff88;">✅ Generation started! Watch progress above.</div>';
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
             } catch (error) {
                 console.error('Error generating EPS:', error);
                 statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Generation failed: ${error.message}</span>`;
