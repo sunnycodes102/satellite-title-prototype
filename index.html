@@ -546,48 +546,29 @@
 
         async function downloadTilesZip(sectorCode) {
             downloadInProgress = true;
+            const statusDiv = document.getElementById('download-status');
+
             try {
-                const statusDiv = document.getElementById('download-status');
                 console.log(`📦 Requesting tiles ZIP for sector: ${sectorCode}`);
-                statusDiv.innerHTML = `<div style="color: #ffa94d;">⏳ Generating tiles ZIP...</div>`;
+                statusDiv.innerHTML = `<div style="color: #ffa94d;">⏳ Starting ZIP download...</div>`;
 
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip`);
-
-                if (!response.ok) {
-                    let errorMsg = 'Unknown error';
-                    try {
-                        const errorData = await response.json();
-                        errorMsg = errorData.error || errorMsg;
-                    } catch (e) {
-                        errorMsg = `HTTP ${response.status}`;
-                    }
-                    statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Error: ${errorMsg}</span>`;
-                    downloadInProgress = false;
-                    return;
-                }
-
-                const blob = await response.blob();
-                if (!blob || blob.size === 0) {
-                    throw new Error('Received empty file');
-                }
-
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - starts immediately
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/tiles-zip`;
                 link.download = `${sectorCode}_tiles.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
 
-                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ ZIP download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</div>`;
-                setTimeout(() => window.URL.revokeObjectURL(url), 2000);
-                setTimeout(() => checkSectorStatus(sectorCode), 4000);
-                downloadInProgress = false;
+                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ ZIP download started!</div>`;
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
             } catch (error) {
                 console.error('❌ Error downloading ZIP:', error);
-                document.getElementById('download-status').innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
-                downloadInProgress = false;
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
             }
+
+            downloadInProgress = false;
         }
 
         // ==================== EPS DIALOG FUNCTIONS ====================

@@ -435,53 +435,40 @@ npm run dev</pre>
 
         async function downloadTilesZip(sectorCode) {
             downloadInProgress = true;
+            const statusDiv = document.getElementById('download-status');
+
             try {
                 console.log(`📦 Requesting tiles ZIP for sector: ${sectorCode}`);
 
-                const statusDiv = document.getElementById('download-status');
                 statusDiv.style.display = 'block';
                 statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
-                    <span style="color: #ffa94d;">⏳ Generating tiles ZIP for ${sectorCode}...</span>
+                    <span style="color: #ffa94d;">⏳ Starting ZIP download...</span>
                 </div>`;
 
-                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip`);
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
-                        <span style="color: #ff6b6b;">❌ ZIP generation failed: ${error.error}</span>
-                    </div>`;
-                    setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
-                    downloadInProgress = false;
-                    return;
-                }
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Direct download - starts immediately
                 const link = document.createElement('a');
-                link.href = url;
+                link.href = `${API_URL}/sectors/${sectorCode}/tiles-zip`;
                 link.download = `${sectorCode}_tiles.zip`;
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                setTimeout(() => window.URL.revokeObjectURL(url), 100);
 
                 statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
-                    <span style="color: #00ff88;">✅ ZIP download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                    <span style="color: #00ff88;">✅ ZIP download started!</span>
                 </div>`;
                 setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
 
-                console.log(`✅ ZIP downloaded successfully`);
-                downloadInProgress = false;
+                console.log(`✅ ZIP download initiated`);
             } catch (error) {
                 console.error(`❌ Error downloading ZIP:`, error);
-                const statusDiv = document.getElementById('download-status');
                 statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
                     <span style="color: #ff6b6b;">❌ ZIP download failed: ${error.message}</span>
                 </div>`;
                 setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
-                downloadInProgress = false;
             }
+
+            downloadInProgress = false;
         }
 
         async function deleteSector(sectorCode) {
