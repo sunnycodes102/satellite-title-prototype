@@ -480,3 +480,142 @@ input[type="text"]::placeholder {
 .w-100 {
     width: 100%;
 }
+/* Modal Dialog */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.modal-content {
+    background: #1a1d29;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content h2 {
+    color: #00ff88;
+    margin-bottom: 20px;
+    font-size: 22px;
+}
+
+.sector-status {
+    background: rgba(0, 255, 136, 0.1);
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border-left: 3px solid #00ff88;
+}
+
+.sector-status p {
+    margin: 0;
+    color: #ffffff;
+    font-size: 14px;
+}
+
+.mode-selection {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 25px;
+}
+
+.mode-option {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.mode-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(0, 255, 136, 0.3);
+}
+
+.mode-option input[type="radio"] {
+    margin-right: 12px;
+    margin-top: 2px;
+    cursor: pointer;
+}
+
+.mode-option input[type="radio"]:checked ~ .mode-content {
+    color: #00ff88;
+}
+
+.mode-option:has(input:checked) {
+    border-color: #00ff88;
+    background: rgba(0, 255, 136, 0.1);
+}
+
+.mode-content {
+    flex: 1;
+}
+
+.mode-content strong {
+    display: block;
+    font-size: 16px;
+    margin-bottom: 5px;
+    color: #ffffff;
+}
+
+.mode-content p {
+    margin: 0;
+    font-size: 13px;
+    color: #a0a0a0;
+}
+
+.mode-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 10px;
+    background: rgba(0, 255, 136, 0.2);
+    color: #00ff88;
+    font-size: 11px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.mode-badge.warning {
+    background: rgba(255, 165, 0, 0.2);
+    color: #ffa500;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.btn-primary {
+    background: #00ff88;
+    color: #1a1d29;
+    font-weight: 600;
+}
+
+.btn-primary:hover {
+    background: #00cc6f;
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
