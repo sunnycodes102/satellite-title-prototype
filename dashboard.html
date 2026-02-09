@@ -148,6 +148,17 @@
 
     <div id="sectors"></div>
 
+    <!-- EPS Dialog -->
+    <div id="eps-dialog" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: none; align-items: center; justify-content: center;">
+        <div style="background: white; padding: 25px; border-radius: 12px; max-width: 400px; width: 90%;">
+            <h3 style="margin: 0 0 15px 0; color: #333;">📐 EPS Download</h3>
+            <div id="eps-dialog-content"></div>
+            <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="closeEpsDialog()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Socket.io Client -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
@@ -335,7 +346,11 @@ npm run dev</pre>
                             ${sector.status === 'incomplete'
                                 ? `<button onclick="viewMissing('${sector.sectorCode}')">🔍 View Missing (${sector.missingTiles.length})</button>`
                                 : ''}
-                            <button class="pdf-btn" onclick="downloadSectorFile('${sector.sectorCode}', 'eps')"
+                            <button class="pdf-btn" onclick="downloadTilesZip('${sector.sectorCode}')"
+                                ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
+                                📦 ZIP (Tiles)
+                            </button>
+                            <button class="pdf-btn" onclick="showEpsDialog('${sector.sectorCode}')"
                                 ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
                                 📐 EPS (11 Col)
                             </button>
@@ -418,6 +433,57 @@ npm run dev</pre>
             }
         }
 
+        async function downloadTilesZip(sectorCode) {
+            downloadInProgress = true;
+            try {
+                console.log(`📦 Requesting tiles ZIP for sector: ${sectorCode}`);
+
+                const statusDiv = document.getElementById('download-status');
+                statusDiv.style.display = 'block';
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ffa94d;">⏳ Generating tiles ZIP for ${sectorCode}...</span>
+                </div>`;
+
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip`);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                        <span style="color: #ff6b6b;">❌ ZIP generation failed: ${error.error}</span>
+                    </div>`;
+                    setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+                    downloadInProgress = false;
+                    return;
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sectorCode}_tiles.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => window.URL.revokeObjectURL(url), 100);
+
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #00ff88;">✅ ZIP download started! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+
+                console.log(`✅ ZIP downloaded successfully`);
+                downloadInProgress = false;
+            } catch (error) {
+                console.error(`❌ Error downloading ZIP:`, error);
+                const statusDiv = document.getElementById('download-status');
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ff6b6b;">❌ ZIP download failed: ${error.message}</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+                downloadInProgress = false;
+            }
+        }
+
         async function deleteSector(sectorCode) {
             if (!confirm(`Delete sector ${sectorCode} and all its tiles?\n\nThis cannot be undone.`)) return;
 
@@ -436,6 +502,153 @@ npm run dev</pre>
                 }
             } catch (error) {
                 alert('Error deleting sector: ' + error.message);
+            }
+        }
+
+        // EPS Dialog Functions
+        let currentEpsSector = null;
+
+        async function showEpsDialog(sectorCode) {
+            currentEpsSector = sectorCode;
+            const dialog = document.getElementById('eps-dialog');
+            const content = document.getElementById('eps-dialog-content');
+
+            content.innerHTML = '<div style="text-align: center; padding: 20px;">Loading...</div>';
+            dialog.style.display = 'flex';
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-status`);
+                const status = await response.json();
+
+                if (status.cached) {
+                    const size = (status.size / 1024 / 1024).toFixed(2);
+                    const date = new Date(status.createdAt).toLocaleString();
+                    content.innerHTML = `
+                        <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                            <div style="color: #155724; font-weight: bold;">✅ Cached EPS Available</div>
+                            <div style="color: #155724; font-size: 14px; margin-top: 8px;">
+                                Size: ${size} MB<br>
+                                Created: ${date}
+                            </div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button onclick="downloadCachedEps('${sectorCode}')" style="padding: 12px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px;">
+                                📥 Download Cached (Fast)
+                            </button>
+                            <button onclick="rebuildEps('${sectorCode}')" style="padding: 12px; background: #ffc107; color: #333; border: none; border-radius: 6px; cursor: pointer; font-size: 15px;">
+                                🔄 Rebuild EPS (Slow)
+                            </button>
+                            <button onclick="deleteCachedEps('${sectorCode}')" style="padding: 12px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px;">
+                                🗑️ Delete Cached
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = `
+                        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                            <div style="color: #856404; font-weight: bold;">⚠️ No Cached EPS</div>
+                            <div style="color: #856404; font-size: 14px; margin-top: 8px;">
+                                EPS will be generated and cached for future downloads.
+                            </div>
+                        </div>
+                        <button onclick="rebuildEps('${sectorCode}')" style="width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px;">
+                            🔨 Generate EPS
+                        </button>
+                    `;
+                }
+            } catch (error) {
+                content.innerHTML = `<div style="color: #dc3545;">Error: ${error.message}</div>`;
+            }
+        }
+
+        function closeEpsDialog() {
+            document.getElementById('eps-dialog').style.display = 'none';
+            currentEpsSector = null;
+        }
+
+        async function downloadCachedEps(sectorCode) {
+            closeEpsDialog();
+            downloadInProgress = true;
+
+            const statusDiv = document.getElementById('download-status');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                <span style="color: #00ff88;">📥 Downloading cached EPS...</span>
+            </div>`;
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-cached`);
+                if (!response.ok) throw new Error('Download failed');
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sectorCode}_eps.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => window.URL.revokeObjectURL(url), 100);
+
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #00ff88;">✅ EPS downloaded! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+            } catch (error) {
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+            }
+            downloadInProgress = false;
+        }
+
+        async function rebuildEps(sectorCode) {
+            closeEpsDialog();
+            downloadInProgress = true;
+
+            const statusDiv = document.getElementById('download-status');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = `<div style="padding: 10px; background: #2a2a2a; border-radius: 8px; margin: 10px 0;">
+                <span style="color: #ffa94d;">⏳ Generating EPS (this may take a while)...</span>
+            </div>`;
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/eps-11col?rebuild=true`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Generation failed');
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sectorCode}_eps.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => window.URL.revokeObjectURL(url), 100);
+
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #1a3d1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #00ff88;">✅ EPS generated and downloaded! (${(blob.size / 1024 / 1024).toFixed(2)} MB)</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+            } catch (error) {
+                statusDiv.innerHTML = `<div style="padding: 10px; background: #3d1a1a; border-radius: 8px; margin: 10px 0;">
+                    <span style="color: #ff6b6b;">❌ Generation failed: ${error.message}</span>
+                </div>`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
+            }
+            downloadInProgress = false;
+        }
+
+        async function deleteCachedEps(sectorCode) {
+            try {
+                await fetch(`${API_URL}/sectors/${sectorCode}/eps-cached`, { method: 'DELETE' });
+                showEpsDialog(sectorCode); // Refresh dialog
+            } catch (error) {
+                alert('Error deleting cache: ' + error.message);
             }
         }
 
