@@ -135,42 +135,75 @@
     </style>
 </head>
 <body>
-    <h1>📊 Session Dashboard</h1>
+    <h1>📊 Sector Dashboard</h1>
 
     <div class="controls">
-        <button onclick="loadSessions()">🔄 Refresh</button>
-        <button onclick="recoverSessions()" style="margin-left: 10px; background: #17a2b8;">🔧 Recover Sessions</button>
+        <button onclick="loadSectors()">🔄 Refresh</button>
         <span style="margin-left: 15px; color: #666;">Auto-refresh: <strong id="auto-refresh-status">ON</strong></span>
     </div>
 
     <div class="stats" id="stats"></div>
 
-    <div id="sessions"></div>
+    <div id="sectors"></div>
+
+    <!-- Socket.io Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
     <script>
-        const API_URL = 'http://localhost:3001/api';
+        // Dynamic URL for remote access - uses current hostname
+        const SERVER_URL = `${window.location.protocol}//${window.location.host}`;
+        const API_URL = `${SERVER_URL}/api`;
         let autoRefresh = true;
 
-        async function loadSessions() {
+        // Connect to Socket.io for real-time updates
+        const socket = io(SERVER_URL);
+
+        socket.on('connect', () => {
+            console.log('🔌 Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('🔌 Disconnected from server');
+        });
+
+        // Listen for real-time sector updates
+        socket.on('sector:update', (sector) => {
+            console.log('📡 Sector updated:', sector.sectorCode);
+            loadSectors(); // Reload all sectors when one updates
+        });
+
+        // Listen for sector list updates
+        socket.on('sectors:list', (sectors) => {
+            console.log('📡 Sectors list updated');
+            renderSectors(sectors);
+        });
+
+        // Listen for stats updates
+        socket.on('stats:update', (stats) => {
+            console.log('📡 Stats updated');
+            renderStats(stats);
+        });
+
+        async function loadSectors() {
             try {
-                // Get sessions
-                const sessionsRes = await fetch(`${API_URL}/sessions`);
-                const sessions = await sessionsRes.json();
+                // Get sectors
+                const sectorsRes = await fetch(`${API_URL}/sectors`);
+                const sectors = await sectorsRes.json();
 
                 // Get stats
-                const healthRes = await fetch('http://localhost:3001/health');
+                const healthRes = await fetch(`${SERVER_URL}/health`);
                 const health = await healthRes.json();
 
                 // Render stats
                 renderStats(health);
 
-                // Render sessions
-                renderSessions(sessions);
+                // Render sectors
+                renderSectors(sectors);
             } catch (error) {
-                console.error('Error loading sessions:', error);
-                document.getElementById('sessions').innerHTML = `
+                console.error('Error loading sectors:', error);
+                document.getElementById('sectors').innerHTML = `
                     <div class="error-state">
-                        ❌ Could not connect to server. Make sure it's running on http://localhost:3001
+                        ❌ Could not connect to server at ${SERVER_URL}
                         <br><br>
                         <strong>Start the server:</strong>
                         <pre style="background: white; padding: 10px; margin-top: 10px; border-radius: 4px;">cd server
@@ -185,45 +218,54 @@ npm run dev</pre>
             const statsEl = document.getElementById('stats');
             statsEl.innerHTML = `
                 <div class="stat-card">
-                    <div class="stat-value">${health.totalSessions || 0}</div>
-                    <div class="stat-label">Total Sessions</div>
+                    <div class="stat-value">${health.totalSectors || 0}</div>
+                    <div class="stat-label">Total Sectors</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value">${health.activeSessions || 0}</div>
-                    <div class="stat-label">Active Sessions</div>
+                    <div class="stat-value">${health.completeSectors || 0}</div>
+                    <div class="stat-label">Complete Sectors</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${health.incompleteSectors || 0}</div>
+                    <div class="stat-label">Incomplete Sectors</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value">${health.totalCachedTiles || 0}</div>
-                    <div class="stat-label">Cached Tiles</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${health.storage || 'unknown'}</div>
-                    <div class="stat-label">Storage Type</div>
+                    <div class="stat-label">Total Tiles</div>
                 </div>
             `;
         }
 
-        function renderSessions(sessions) {
-            const container = document.getElementById('sessions');
+        function renderSectors(sectors) {
+            const container = document.getElementById('sectors');
 
-            if (sessions.length === 0) {
+            if (sectors.length === 0) {
                 container.innerHTML = `
                     <div class="empty-state">
-                        <h2>No sessions yet</h2>
-                        <p>Create a session from the main app to see it here</p>
+                        <h2>No sectors yet</h2>
+                        <p>Generate tiles from the main app to see sectors here</p>
                     </div>
                 `;
                 return;
             }
 
-            container.innerHTML = sessions.map(session => {
-                const progress = (session.uploadedTiles / session.totalTiles * 100).toFixed(1);
+            // Sort: incomplete first, then by sector code
+            sectors.sort((a, b) => {
+                if (a.status !== b.status) {
+                    return a.status === 'incomplete' ? -1 : 1;
+                }
+                return a.sectorCode.localeCompare(b.sectorCode);
+            });
+
+            container.innerHTML = sectors.map(sector => {
+                const progress = (sector.uploadedTiles / sector.totalTiles * 100).toFixed(1);
+                const statusClass = sector.status === 'complete' ? 'status-completed' : 'status-uploading';
 
                 return `
                     <div class="session">
                         <div class="session-header">
-                            <div class="session-title">${session.sectorCode}</div>
-                            <span class="status status-${session.status}">${session.status}</span>
+                            <div class="session-title">${sector.sectorCode}</div>
+                            <span class="status ${statusClass}">${sector.status}</span>
                         </div>
 
                         <div class="progress-container">
@@ -233,39 +275,61 @@ npm run dev</pre>
                                 </div>
                             </div>
                             <div style="margin-top: 5px; color: #666; font-size: 14px;">
-                                ${session.uploadedTiles} / ${session.totalTiles} tiles
+                                ${sector.uploadedTiles} / ${sector.totalTiles} tiles
+                                ${sector.status === 'incomplete' ? `(${sector.missingTiles.length} missing)` : ''}
                             </div>
                         </div>
 
                         <div class="session-meta">
-                            <div><strong>Session ID:</strong> ${session.id}</div>
-                            <div><strong>Created:</strong> ${new Date(session.createdAt).toLocaleString()}</div>
+                            <div><strong>Sector:</strong> ${sector.sectorCode}</div>
+                            <div><strong>Status:</strong> ${sector.status}</div>
+                            <div><strong>Last Updated:</strong> ${new Date(sector.lastUpdatedAt || sector.createdAt).toLocaleString()}</div>
                         </div>
 
                         <div class="session-actions">
-                            <button onclick="viewSession('${session.id}')">👁️ View Details</button>
-                            <button class="pdf-btn" onclick="downloadFile('${session.id}', '${session.sectorCode}', 'pdf')">📄 PDF (11 Columns)</button>
-                            <button class="pdf-btn" onclick="downloadFile('${session.id}', '${session.sectorCode}', 'eps')">📐 EPS (11 Columns)</button>
-                            <button class="delete-btn" onclick="deleteSession('${session.id}')">🗑️ Delete</button>
+                            ${sector.status === 'incomplete'
+                                ? `<button onclick="viewMissing('${sector.sectorCode}')">🔍 View Missing (${sector.missingTiles.length})</button>`
+                                : ''}
+                            <button class="pdf-btn" onclick="downloadSectorFile('${sector.sectorCode}', 'pdf')"
+                                ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
+                                📄 PDF (11 Col)
+                            </button>
+                            <button class="pdf-btn" onclick="downloadSectorFile('${sector.sectorCode}', 'eps')"
+                                ${sector.status !== 'complete' ? 'disabled title="Complete sector first"' : ''}>
+                                📐 EPS (11 Col)
+                            </button>
+                            <button class="delete-btn" onclick="deleteSector('${sector.sectorCode}')">🗑️ Delete</button>
                         </div>
                     </div>
                 `;
             }).join('');
         }
 
-        async function viewSession(sessionId) {
-            const response = await fetch(`${API_URL}/sessions/${sessionId}`);
-            const session = await response.json();
-            alert(JSON.stringify(session, null, 2));
+        async function viewMissing(sectorCode) {
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/missing`);
+                const data = await response.json();
+
+                if (data.count === 0) {
+                    alert(`Sector ${sectorCode} is complete!`);
+                    return;
+                }
+
+                const preview = data.missing.slice(0, 20).join(', ');
+                const message = `Missing ${data.count} tiles from sector ${sectorCode}:\n\n${preview}${data.count > 20 ? `\n... and ${data.count - 20} more` : ''}`;
+                alert(message);
+            } catch (error) {
+                alert('Error fetching missing tiles: ' + error.message);
+            }
         }
 
-        async function downloadFile(sessionId, sectorCode, format = 'pdf') {
+        async function downloadSectorFile(sectorCode, format = 'pdf') {
             try {
                 const formatUpper = format.toUpperCase();
-                console.log(`📄 Requesting ${formatUpper} (11-column) for session: ${sessionId}`);
+                console.log(`📄 Requesting ${formatUpper} (11-column) for sector: ${sectorCode}`);
 
-                // Fetch file from server (11-column layout)
-                const response = await fetch(`${API_URL}/sessions/${sessionId}/${format}-11col`);
+                // Fetch file from server (sector-based endpoint)
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/${format}-11col`);
 
                 if (!response.ok) {
                     const error = await response.json();
@@ -280,7 +344,8 @@ npm run dev</pre>
                 const url = window.URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = `${sectorCode}_tiles_11col.${format}`;
+                // Both PDF and EPS are now delivered as ZIP files with separate pages
+                link.download = `${sectorCode}_tiles_11col_${format}.zip`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -295,66 +360,37 @@ npm run dev</pre>
             }
         }
 
-        async function deleteSession(sessionId) {
-            if (!confirm('Delete this session and all its files?')) return;
+        async function deleteSector(sectorCode) {
+            if (!confirm(`Delete sector ${sectorCode} and all its tiles?\n\nThis cannot be undone.`)) return;
 
             try {
-                const response = await fetch(`${API_URL}/sessions/${sessionId}`, {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}`, {
                     method: 'DELETE'
                 });
 
                 const result = await response.json();
 
                 if (result.success) {
-                    console.log('✅ Session deleted');
-                    loadSessions();
+                    console.log(`✅ Sector deleted: ${sectorCode}`);
+                    loadSectors();
                 } else {
                     alert('Error: ' + result.error);
                 }
             } catch (error) {
-                alert('Error deleting session: ' + error.message);
+                alert('Error deleting sector: ' + error.message);
             }
         }
 
-        async function recoverSessions() {
-            if (!confirm('Recover sessions from uploaded files?\n\nThis will scan the uploads directory and create sessions for any tiles found.')) {
-                return;
-            }
+        // Initial load (Socket.io handles real-time updates)
+        loadSectors();
 
-            try {
-                console.log('🔧 Recovering sessions...');
-
-                const response = await fetch(`${API_URL}/sessions/recover`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    console.log('✅ Recovery complete:', result.sessions);
-                    alert(`Successfully recovered ${result.sessions.length} session(s)!`);
-                    loadSessions();
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (error) {
-                console.error('❌ Error recovering sessions:', error);
-                alert('Error recovering sessions: ' + error.message);
-            }
-        }
-
-        // Auto-refresh every 2 seconds
+        // Fallback: Refresh every 30 seconds if Socket.io fails
         setInterval(() => {
-            if (autoRefresh) {
-                loadSessions();
+            if (!socket.connected) {
+                console.log('⚠️ Socket.io disconnected, using fallback polling');
+                loadSectors();
             }
-        }, 2000);
-
-        // Initial load
-        loadSessions();
+        }, 30000);
     </script>
 </body>
 </html>
