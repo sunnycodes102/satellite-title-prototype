@@ -814,7 +814,191 @@ function generateAllTileCodesForSector(sectorCode) {
     return tiles;
 }
 
+// ==================== SECTOR-BASED DOWNLOADS ====================
+
+// Download all tiles as ZIP
+app.get('/api/sectors/:sectorCode/tiles-zip', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector) {
+            return res.status(404).json({ success: false, error: 'Sector not found' });
+        }
+
+        if (sector.status !== 'complete') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot download incomplete sector (${sector.uploadedTiles}/729 tiles)`
+            });
+        }
+
+        // Check if generation already in progress
+        const generationKey = `${sectorCode}-zip`;
+        if (ongoingGenerations.has(generationKey)) {
+            return res.status(409).json({
+                success: false,
+                error: 'ZIP generation already in progress for this sector',
+                inProgress: true
+            });
+        }
+
+        console.log(`📦 Generating tiles ZIP for sector: ${sectorCode}`);
+
+        // Track this generation
+        const clientId = req.headers['x-socket-id'] || 'unknown';
+        const generation = { startedAt: Date.now(), clientId, aborted: false };
+        ongoingGenerations.set(generationKey, generation);
+
+        // Clean up on response close
+        res.on('close', () => {
+            generation.aborted = true;
+        });
+
+        // Emit initial progress
+        io.emit('download:progress', {
+            type: 'zip',
+            sectorCode,
+            processed: 0,
+            total: sector.tiles.length,
+            percentage: 0,
+            status: 'starting'
+        });
+
+        // Create ZIP archive
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles.zip"`);
+        archive.pipe(res);
+
+        let processedTiles = 0;
+        const totalTiles = sector.tiles.length;
+
+        for (const tileCode of sector.tiles) {
+            if (generation.aborted || res.closed) {
+                console.log(`⚠️ Aborting ZIP generation for ${sectorCode}`);
+                archive.abort();
+                ongoingGenerations.delete(generationKey);
+                return;
+            }
+
+            const tile = storage.getTile(tileCode);
+            if (!tile || !tile.filePath) continue;
+
+            const exists = await fileExists(tile.filePath);
+            if (!exists) continue;
+
+            // Add file to archive
+            archive.file(tile.filePath, { name: `${tileCode}.png` });
+            processedTiles++;
+
+            // Emit progress every 50 tiles
+            if (processedTiles % 50 === 0 || processedTiles === totalTiles) {
+                const percentage = Math.round((processedTiles / totalTiles) * 100);
+                io.emit('download:progress', {
+                    type: 'zip',
+                    sectorCode,
+                    processed: processedTiles,
+                    total: totalTiles,
+                    percentage,
+                    status: 'processing'
+                });
+            }
+        }
+
+        await archive.finalize();
+
+        // Emit completion
+        io.emit('download:progress', {
+            type: 'zip',
+            sectorCode,
+            processed: processedTiles,
+            total: totalTiles,
+            percentage: 100,
+            status: 'complete'
+        });
+
+        console.log(`✅ ZIP generated: ${processedTiles} tiles`);
+        ongoingGenerations.delete(generationKey);
+
+    } catch (error) {
+        console.error('❌ Error generating ZIP:', error);
+        ongoingGenerations.delete(`${req.params.sectorCode}-zip`);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    }
+});
+
 // ==================== SECTOR-BASED PDF/EPS GENERATION ====================
+
+// Create exports directory for cached files
+const exportsDir = './exports';
+try {
+    await fs.mkdir(exportsDir, { recursive: true });
+} catch (err) {
+    console.error('Failed to create exports directory:', err);
+}
+
+// Check EPS cache status
+app.get('/api/sectors/:sectorCode/eps-status', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
+
+        try {
+            const stats = await fs.stat(cachedPath);
+            res.json({
+                cached: true,
+                filename: `${sectorCode}_eps.zip`,
+                size: stats.size,
+                createdAt: stats.mtime.toISOString()
+            });
+        } catch {
+            res.json({ cached: false });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Download cached EPS (fast)
+app.get('/api/sectors/:sectorCode/eps-cached', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
+
+        try {
+            await fs.access(cachedPath);
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_eps.zip"`);
+            createReadStream(cachedPath).pipe(res);
+            console.log(`📦 Serving cached EPS for ${sectorCode}`);
+        } catch {
+            res.status(404).json({ success: false, error: 'No cached EPS found. Generate first.' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Delete cached EPS
+app.delete('/api/sectors/:sectorCode/eps-cached', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
+
+        try {
+            await fs.rm(cachedPath, { force: true });
+            console.log(`🗑️ Deleted cached EPS for ${sectorCode}`);
+            res.json({ success: true });
+        } catch {
+            res.json({ success: true, message: 'No cached file to delete' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // Generate PDF for sector - 11 column layout
 app.get('/api/sectors/:sectorCode/pdf-11col', async (req, res) => {
@@ -1034,12 +1218,14 @@ app.get('/api/sectors/:sectorCode/pdf-11col', async (req, res) => {
     }
 });
 
-// Generate EPS for sector - 11 column layout
+// Generate EPS for sector - 11 column layout (with caching)
 app.get('/api/sectors/:sectorCode/eps-11col', async (req, res) => {
     const tempFiles = [];
     try {
         const { sectorCode } = req.params;
+        const rebuild = req.query.rebuild === 'true';
         const sector = storage.getSector(sectorCode);
+        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
 
         if (!sector) {
             return res.status(404).json({ success: false, error: 'Sector not found' });
@@ -1052,6 +1238,20 @@ app.get('/api/sectors/:sectorCode/eps-11col', async (req, res) => {
             });
         }
 
+        // Check for cached file if not rebuilding
+        if (!rebuild) {
+            try {
+                await fs.access(cachedPath);
+                console.log(`📦 Serving cached EPS for ${sectorCode}`);
+                res.setHeader('Content-Type', 'application/zip');
+                res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_eps.zip"`);
+                createReadStream(cachedPath).pipe(res);
+                return;
+            } catch {
+                // No cache, continue to generate
+            }
+        }
+
         // Check if generation already in progress
         const generationKey = `${sectorCode}-eps`;
         if (ongoingGenerations.has(generationKey)) {
@@ -1062,7 +1262,7 @@ app.get('/api/sectors/:sectorCode/eps-11col', async (req, res) => {
             });
         }
 
-        console.log(`📄 Generating EPS (11-column) for sector: ${sectorCode}`);
+        console.log(`📄 Generating EPS (11-column) for sector: ${sectorCode}${rebuild ? ' (rebuild)' : ''}`);
 
         // Track this generation
         const clientId = req.headers['x-socket-id'] || 'unknown';
@@ -1205,17 +1405,24 @@ grestore
             });
         }
 
+        // Create ZIP and save to cache
         const archive = archiver('zip', { zlib: { level: 9 } });
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles_11col_eps.zip"`);
-        archive.pipe(res);
+        const cacheWriteStream = createWriteStream(cachedPath);
+        archive.pipe(cacheWriteStream);
 
         for (let i = 0; i < totalPages; i++) {
             archive.file(tempFiles[i], { name: `${sectorCode}_page${i+1}_11col.eps` });
         }
 
         await archive.finalize();
-        console.log(`✅ EPS ZIP generated`);
+
+        // Wait for file to be written
+        await new Promise((resolve, reject) => {
+            cacheWriteStream.on('finish', resolve);
+            cacheWriteStream.on('error', reject);
+        });
+
+        console.log(`✅ EPS ZIP generated and cached: ${cachedPath}`);
 
         // Emit completion
         io.emit('download:progress', {
@@ -1232,11 +1439,15 @@ grestore
         // Clean up tracking
         ongoingGenerations.delete(generationKey);
 
-        setTimeout(async () => {
-            for (const f of tempFiles) {
-                try { await fs.rm(f, { force: true }); } catch {}
-            }
-        }, 5000);
+        // Clean up temp EPS files
+        for (const f of tempFiles) {
+            try { await fs.rm(f, { force: true }); } catch {}
+        }
+
+        // Send cached file to client
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_eps.zip"`);
+        createReadStream(cachedPath).pipe(res);
     } catch (error) {
         console.error('❌ Error generating EPS:', error);
         ongoingGenerations.delete(generationKey);
