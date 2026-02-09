@@ -969,11 +969,15 @@ app.get('/api/sectors/:sectorCode/eps-cached', async (req, res) => {
         const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
 
         try {
-            await fs.access(cachedPath);
+            // Get file stats for Content-Length header
+            const stats = await fs.stat(cachedPath);
+
             res.setHeader('Content-Type', 'application/zip');
             res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_eps.zip"`);
+            res.setHeader('Content-Length', stats.size);
+
             createReadStream(cachedPath).pipe(res);
-            console.log(`📦 Serving cached EPS for ${sectorCode}`);
+            console.log(`📦 Serving cached EPS for ${sectorCode} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
         } catch {
             res.status(404).json({ success: false, error: 'No cached EPS found. Generate first.' });
         }
