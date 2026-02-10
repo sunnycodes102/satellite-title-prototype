@@ -132,7 +132,7 @@
                         </div>
 
                         <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
-                            <button class="btn btn-secondary" id="download-zip-btn" onclick="downloadSectorZIP()" disabled title="Complete sector first">
+                            <button class="btn btn-secondary" id="download-zip-btn" onclick="showTilesZipDialog()" disabled title="Complete sector first">
                                 📦 Download All Tiles (ZIP)
                             </button>
                             <button class="btn btn-secondary" id="download-eps-btn" onclick="showEpsDialog()" disabled title="Complete sector first">
@@ -149,6 +149,17 @@
                         <div id="eps-dialog-content"></div>
                         <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
                             <button onclick="closeEpsDialog()" class="btn btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tiles ZIP Dialog -->
+                <div id="tiles-zip-dialog" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+                    <div style="background: #1a1a2e; padding: 25px; border-radius: 12px; max-width: 400px; width: 90%; border: 1px solid #333;">
+                        <h3 style="margin: 0 0 15px 0; color: #fff;">📦 Tiles ZIP Download</h3>
+                        <div id="tiles-zip-dialog-content"></div>
+                        <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                            <button onclick="closeTilesZipDialog()" class="btn btn-secondary">Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -539,20 +550,164 @@
             await downloadSectorFile(currentSectorForDownload, 'eps');
         }
 
-        async function downloadSectorZIP() {
+        function showTilesZipDialog() {
             if (!currentSectorForDownload) return;
-            await downloadTilesZip(currentSectorForDownload);
+            const dialog = document.getElementById('tiles-zip-dialog');
+            const content = document.getElementById('tiles-zip-dialog-content');
+
+            dialog.style.display = 'flex';
+            content.innerHTML = '<div style="color: #aaa;">Loading tiles ZIP status...</div>';
+
+            checkTilesZipStatus(currentSectorForDownload);
         }
 
-        async function downloadTilesZip(sectorCode) {
+        function closeTilesZipDialog() {
+            document.getElementById('tiles-zip-dialog').style.display = 'none';
+        }
+
+        async function checkTilesZipStatus(sectorCode) {
+            const content = document.getElementById('tiles-zip-dialog-content');
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip-status`);
+                const status = await response.json();
+
+                if (status.cached) {
+                    const date = new Date(status.createdAt).toLocaleString();
+
+                    content.innerHTML = `
+                        <div style="margin-bottom: 15px;">
+                            <div style="color: #00ff88; margin-bottom: 10px;">✅ Cached Tiles ZIP Available</div>
+                            <div style="font-size: 13px; color: #aaa;">
+                                <div>📦 ${status.sizeFormatted}</div>
+                                <div>🕐 Created: ${date}</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button onclick="downloadCachedTilesZip('${sectorCode}')" class="btn btn-primary" style="width: 100%;">
+                                📥 Download Cached ZIP (Resume Support)
+                            </button>
+                            <button onclick="regenerateTilesZip('${sectorCode}')" class="btn btn-secondary" style="width: 100%;">
+                                🔄 Regenerate ZIP
+                            </button>
+                            <button onclick="deleteCachedTilesZip('${sectorCode}')" class="btn btn-danger" style="width: 100%; background: #ff4444;">
+                                🗑️ Delete Cached ZIP
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = `
+                        <div style="margin-bottom: 15px;">
+                            <div style="color: #ffa94d; margin-bottom: 10px;">📭 No Cached Tiles ZIP</div>
+                            <div style="font-size: 13px; color: #aaa; margin-bottom: 10px;">
+                                Choose how to download:
+                            </div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button onclick="generateTilesZipCache('${sectorCode}')" class="btn btn-primary" style="width: 100%;">
+                                💾 Generate & Cache ZIP (Resume Support)
+                            </button>
+                            <button onclick="downloadTilesZipDirect('${sectorCode}')" class="btn btn-secondary" style="width: 100%;">
+                                ⚡ Direct Download (No Cache)
+                            </button>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error checking tiles ZIP status:', error);
+                content.innerHTML = `<div style="color: #ff6b6b;">❌ Error checking ZIP status: ${error.message}</div>`;
+            }
+        }
+
+        async function downloadCachedTilesZip(sectorCode) {
             downloadInProgress = true;
+            closeTilesZipDialog();
+
+            const statusDiv = document.getElementById('download-status');
+            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Starting download...</div>';
+
+            try {
+                const link = document.createElement('a');
+                link.href = `${API_URL}/sectors/${sectorCode}/tiles-zip-cached`;
+                link.download = `${sectorCode}_tiles.zip`;
+                link.style.display = 'none';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                statusDiv.innerHTML = '<div style="color: #00ff88;">✅ Download started! Your browser can resume if interrupted.</div>';
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
+            } catch (error) {
+                console.error('Error downloading cached tiles ZIP:', error);
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
+            }
+
+            downloadInProgress = false;
+        }
+
+        async function generateTilesZipCache(sectorCode) {
+            downloadInProgress = true;
+            closeTilesZipDialog();
+
+            const statusDiv = document.getElementById('download-status');
+            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Generating and caching tiles ZIP...</div>';
+
+            try {
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip-cache`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ ZIP cached! (${result.sizeFormatted}). Click download button again to download.</div>`;
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
+            } catch (error) {
+                console.error('Error caching tiles ZIP:', error);
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Cache failed: ${error.message}</span>`;
+            }
+
+            downloadInProgress = false;
+        }
+
+        async function regenerateTilesZip(sectorCode) {
+            if (!confirm('Regenerate tiles ZIP? This will replace the existing cache.')) return;
+            await generateTilesZipCache(sectorCode);
+        }
+
+        async function deleteCachedTilesZip(sectorCode) {
+            if (!confirm(`Delete cached tiles ZIP for sector ${sectorCode}?`)) return;
+
+            closeTilesZipDialog();
             const statusDiv = document.getElementById('download-status');
 
             try {
-                console.log(`📦 Requesting tiles ZIP for sector: ${sectorCode}`);
-                statusDiv.innerHTML = `<div style="color: #ffa94d;">⏳ Starting ZIP download...</div>`;
+                const response = await fetch(`${API_URL}/sectors/${sectorCode}/tiles-zip-cached`, {
+                    method: 'DELETE'
+                });
 
-                // Direct download - starts immediately
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                statusDiv.innerHTML = '<div style="color: #00ff88;">✅ Cached tiles ZIP deleted</div>';
+                setTimeout(() => checkSectorStatus(sectorCode), 2000);
+            } catch (error) {
+                console.error('Error deleting cached tiles ZIP:', error);
+                statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Delete failed: ${error.message}</span>`;
+            }
+        }
+
+        async function downloadTilesZipDirect(sectorCode) {
+            downloadInProgress = true;
+            closeTilesZipDialog();
+
+            const statusDiv = document.getElementById('download-status');
+            statusDiv.innerHTML = '<div style="color: #ffa94d;">⏳ Starting direct download...</div>';
+
+            try {
                 const link = document.createElement('a');
                 link.href = `${API_URL}/sectors/${sectorCode}/tiles-zip`;
                 link.download = `${sectorCode}_tiles.zip`;
@@ -561,10 +716,10 @@
                 link.click();
                 document.body.removeChild(link);
 
-                statusDiv.innerHTML = `<div style="color: #00ff88;">✅ ZIP download started!</div>`;
+                statusDiv.innerHTML = '<div style="color: #00ff88;">✅ Direct download started!</div>';
                 setTimeout(() => checkSectorStatus(sectorCode), 2000);
             } catch (error) {
-                console.error('❌ Error downloading ZIP:', error);
+                console.error('Error downloading tiles ZIP:', error);
                 statusDiv.innerHTML = `<span style="color: #ff6b6b;">❌ Download failed: ${error.message}</span>`;
             }
 
