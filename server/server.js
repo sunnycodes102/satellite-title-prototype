@@ -820,6 +820,18 @@ function generateAllTileCodesForSector(sectorCode) {
 app.get('/api/sectors/:sectorCode/tiles-zip', async (req, res) => {
     try {
         const { sectorCode } = req.params;
+
+        // Handle HEAD requests quickly without generating
+        if (req.method === 'HEAD') {
+            const sector = storage.getSector(sectorCode);
+            if (!sector || sector.status !== 'complete') {
+                return res.status(404).end();
+            }
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Accept-Ranges', 'bytes');
+            return res.status(200).end();
+        }
+
         const sector = storage.getSector(sectorCode);
 
         if (!sector) {
@@ -1227,9 +1239,30 @@ app.get('/api/sectors/:sectorCode/eps-11col', async (req, res) => {
     const tempFiles = [];
     try {
         const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
+
+        // Handle HEAD requests quickly without generating
+        if (req.method === 'HEAD') {
+            const sector = storage.getSector(sectorCode);
+            if (!sector || sector.status !== 'complete') {
+                return res.status(404).end();
+            }
+            // Check if cache exists and return appropriate headers
+            try {
+                const stats = await fs.stat(cachedPath);
+                res.setHeader('Content-Type', 'application/zip');
+                res.setHeader('Content-Length', stats.size);
+                res.setHeader('Accept-Ranges', 'bytes');
+                return res.status(200).end();
+            } catch {
+                res.setHeader('Content-Type', 'application/zip');
+                res.setHeader('Accept-Ranges', 'bytes');
+                return res.status(200).end();
+            }
+        }
+
         const rebuild = req.query.rebuild === 'true';
         const sector = storage.getSector(sectorCode);
-        const cachedPath = path.join(exportsDir, `${sectorCode}_eps.zip`);
 
         if (!sector) {
             return res.status(404).json({ success: false, error: 'Sector not found' });
