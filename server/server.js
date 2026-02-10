@@ -881,6 +881,13 @@ app.get('/api/sectors/:sectorCode/tiles-zip', async (req, res) => {
         const archive = archiver('zip', { zlib: { level: 9 } });
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles.zip"`);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        // Set timeout to 10 minutes for large downloads
+        req.setTimeout(600000);
+        res.setTimeout(600000);
+
         archive.pipe(res);
 
         let processedTiles = 0;
@@ -942,6 +949,151 @@ app.get('/api/sectors/:sectorCode/tiles-zip', async (req, res) => {
     }
 });
 
+// ==================== TILES ZIP CACHING ====================
+
+// Check tiles-zip cache status
+app.get('/api/sectors/:sectorCode/tiles-zip-status', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_tiles.zip`);
+
+        try {
+            const stats = await fs.stat(cachedPath);
+            res.json({
+                success: true,
+                cached: true,
+                size: stats.size,
+                sizeFormatted: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+                createdAt: stats.mtime
+            });
+        } catch {
+            res.json({ success: true, cached: false });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Generate and cache tiles-zip
+app.post('/api/sectors/:sectorCode/tiles-zip-cache', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const sector = storage.getSector(sectorCode);
+
+        if (!sector || sector.status !== 'complete') {
+            return res.status(404).json({ success: false, error: 'Sector not found or incomplete' });
+        }
+
+        const cachedPath = path.join(exportsDir, `${sectorCode}_tiles.zip`);
+        console.log(`📦 Generating and caching tiles ZIP for sector: ${sectorCode}`);
+
+        // Create archive
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const output = createWriteStream(cachedPath);
+
+        // Setup write promise BEFORE piping
+        const writePromise = new Promise((resolve, reject) => {
+            output.on('finish', resolve);
+            output.on('error', reject);
+        });
+
+        archive.pipe(output);
+
+        let processedTiles = 0;
+
+        for (const tileCode of sector.tiles) {
+            const tile = storage.getTile(tileCode);
+            if (!tile || !tile.filePath) continue;
+
+            const exists = await fileExists(tile.filePath);
+            if (!exists) continue;
+
+            archive.file(tile.filePath, { name: `${tileCode}.png` });
+            processedTiles++;
+        }
+
+        await archive.finalize();
+        await writePromise;
+
+        const stats = await fs.stat(cachedPath);
+        console.log(`✅ Tiles ZIP cached: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+
+        res.json({
+            success: true,
+            size: stats.size,
+            sizeFormatted: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            tilesIncluded: processedTiles
+        });
+
+    } catch (error) {
+        console.error('❌ Error caching tiles ZIP:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Download cached tiles-zip (with Range support)
+app.get('/api/sectors/:sectorCode/tiles-zip-cached', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_tiles.zip`);
+
+        try {
+            const stats = await fs.stat(cachedPath);
+            const fileSize = stats.size;
+
+            // Set common headers
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_tiles.zip"`);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'no-cache');
+
+            // Handle Range requests for resume capability
+            const range = req.headers.range;
+            if (range) {
+                const parts = range.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                const chunkSize = (end - start) + 1;
+
+                res.status(206); // Partial Content
+                res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                res.setHeader('Content-Length', chunkSize);
+
+                const stream = createReadStream(cachedPath, { start, end });
+                stream.pipe(res);
+                console.log(`📦 Serving cached tiles ZIP (RESUME) for ${sectorCode} (${(chunkSize / 1024 / 1024).toFixed(2)} MB, ${start}-${end}/${fileSize})`);
+            } else {
+                // Full file download
+                res.setHeader('Content-Length', fileSize);
+                createReadStream(cachedPath).pipe(res);
+                console.log(`📦 Serving cached tiles ZIP for ${sectorCode} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
+            }
+        } catch {
+            res.status(404).json({ success: false, error: 'No cached tiles ZIP found. Generate first.' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Delete cached tiles-zip
+app.delete('/api/sectors/:sectorCode/tiles-zip-cached', async (req, res) => {
+    try {
+        const { sectorCode } = req.params;
+        const cachedPath = path.join(exportsDir, `${sectorCode}_tiles.zip`);
+
+        try {
+            await fs.rm(cachedPath, { force: true });
+            console.log(`🗑️ Deleted cached tiles ZIP for ${sectorCode}`);
+            res.json({ success: true });
+        } catch {
+            res.json({ success: true, message: 'No cached file to delete' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // ==================== SECTOR-BASED PDF/EPS GENERATION ====================
 
 // Create exports directory for cached files
@@ -983,13 +1135,35 @@ app.get('/api/sectors/:sectorCode/eps-cached', async (req, res) => {
         try {
             // Get file stats for Content-Length header
             const stats = await fs.stat(cachedPath);
+            const fileSize = stats.size;
 
+            // Set common headers
             res.setHeader('Content-Type', 'application/zip');
             res.setHeader('Content-Disposition', `attachment; filename="${sectorCode}_eps.zip"`);
-            res.setHeader('Content-Length', stats.size);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'no-cache');
 
-            createReadStream(cachedPath).pipe(res);
-            console.log(`📦 Serving cached EPS for ${sectorCode} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+            // Handle Range requests for resume capability
+            const range = req.headers.range;
+            if (range) {
+                const parts = range.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                const chunkSize = (end - start) + 1;
+
+                res.status(206); // Partial Content
+                res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                res.setHeader('Content-Length', chunkSize);
+
+                const stream = createReadStream(cachedPath, { start, end });
+                stream.pipe(res);
+                console.log(`📦 Serving cached EPS (RESUME) for ${sectorCode} (${(chunkSize / 1024 / 1024).toFixed(2)} MB, ${start}-${end}/${fileSize})`);
+            } else {
+                // Full file download
+                res.setHeader('Content-Length', fileSize);
+                createReadStream(cachedPath).pipe(res);
+                console.log(`📦 Serving cached EPS for ${sectorCode} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
+            }
         } catch {
             res.status(404).json({ success: false, error: 'No cached EPS found. Generate first.' });
         }
