@@ -226,9 +226,8 @@
 
     <!-- Download Functions -->
     <script>
-        // Dynamic URL for remote access
+        // Dynamic URL for remote access (API_URL is defined in app.js)
         const SERVER_URL = `${window.location.protocol}//${window.location.host}`;
-        const API_URL = `${SERVER_URL}/api`; // API endpoint base URL
         let currentSectorForDownload = null;
         let downloadInProgress = false;
 
