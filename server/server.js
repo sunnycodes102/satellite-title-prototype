@@ -1445,6 +1445,13 @@ grestore
         // Create ZIP and save to cache
         const archive = archiver('zip', { zlib: { level: 9 } });
         const cacheWriteStream = createWriteStream(cachedPath);
+
+        // Set up finish handler BEFORE piping
+        const writePromise = new Promise((resolve, reject) => {
+            cacheWriteStream.on('finish', resolve);
+            cacheWriteStream.on('error', reject);
+        });
+
         archive.pipe(cacheWriteStream);
 
         for (let i = 0; i < totalPages; i++) {
@@ -1453,13 +1460,15 @@ grestore
 
         await archive.finalize();
 
-        // Wait for file to be written
-        await new Promise((resolve, reject) => {
-            cacheWriteStream.on('finish', resolve);
-            cacheWriteStream.on('error', reject);
-        });
+        // Wait for file to be fully written to disk
+        await writePromise;
 
         console.log(`✅ EPS ZIP generated and cached: ${cachedPath}`);
+
+        // NOW it's safe to delete temp files - archive is fully written
+        for (const f of tempFiles) {
+            try { await fs.rm(f, { force: true }); } catch {}
+        }
 
         // Emit completion
         io.emit('download:progress', {
@@ -1475,11 +1484,6 @@ grestore
 
         // Clean up tracking
         ongoingGenerations.delete(generationKey);
-
-        // Clean up temp EPS files
-        for (const f of tempFiles) {
-            try { await fs.rm(f, { force: true }); } catch {}
-        }
 
         // Send cached file to client
         res.setHeader('Content-Type', 'application/zip');
